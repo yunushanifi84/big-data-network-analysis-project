@@ -97,6 +97,19 @@ services:
       - JUPYTER_ENABLE_LAB=yes
     command: jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token='' --NotebookApp.password=''
 
+  kafka-producer:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.producer
+    container_name: kafka-producer
+    depends_on:
+      - kafka
+    volumes:
+      - ./data:/app/data
+      - ./kafka:/app/kafka
+    networks:
+      - bigdata-net
+
 networks:
   bigdata-net:
     driver: bridge

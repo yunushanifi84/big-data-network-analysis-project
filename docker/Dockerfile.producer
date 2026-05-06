@@ -1,0 +1,11 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install necessary packages
+RUN pip install --no-cache-dir pandas kafka-python
+
+# Set PYTHONPATH so the scripts can import local modules if needed
+ENV PYTHONPATH=/app
+
+CMD ["python", "kafka/producer.py", "--rate", "50"]
