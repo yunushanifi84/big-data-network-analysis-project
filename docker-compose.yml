@@ -1,0 +1,102 @@
+version: '3.8'
+
+# Spark konteynerleri için ortak ayarlar (kod tekrarını önlemek için)
+x-spark-common: &spark-common
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.spark
+  volumes:
+    - ./data:/opt/bitnami/spark/data
+    - ./delta-storage:/opt/bitnami/spark/delta-storage
+    - ./mlflow-artifacts:/opt/bitnami/spark/mlflow-artifacts
+    - ./notebooks:/opt/bitnami/spark/notebooks
+    - ./spark:/opt/bitnami/spark/spark
+    - ./ml:/opt/bitnami/spark/ml
+  networks:
+    - bigdata-net
+
+services:
+  zookeeper:
+    image: bitnamilegacy/zookeeper:3.8.3
+    container_name: zookeeper
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+    ports:
+      - "2181:2181"
+    networks:
+      - bigdata-net
+
+  kafka:
+    image: bitnamilegacy/kafka:3.4.1
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    environment:
+      - KAFKA_BROKER_ID=1
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      - ALLOW_ANONYMOUS_LOGIN=yes
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,EXTERNAL://:29092
+      # Spark'ın Kafka'yı bulabilmesi için en kritik ayar:
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    networks:
+      - bigdata-net
+
+  spark-master:
+    <<: *spark-common
+    container_name: spark-master
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+
+  spark-worker-1:
+    <<: *spark-common
+    container_name: spark-worker-1
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      # Sunucuyu kilitlememek için kaynak limitleri
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
+    ports:
+      - "8081:8081"
+
+  mlflow-server:
+    image: python:3.9-slim
+    container_name: mlflow-server
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlflow-artifacts:/mlflow-artifacts
+      - ./mlruns:/mlruns
+    # Backend SQLite ve artifact ayarları
+    command: >
+      bash -c "pip install mlflow && 
+      mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:////mlruns/mlflow.db --default-artifact-root /mlflow-artifacts"
+    networks:
+      - bigdata-net
+
+  jupyter:
+    <<: *spark-common
+    container_name: jupyter-lab
+    ports:
+      - "8888:8888"
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+    command: jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token='' --NotebookApp.password=''
+
+networks:
+  bigdata-net:
+    driver: bridge

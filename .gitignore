@@ -1,0 +1,11 @@
+# Veri ve Model Çıktıları
+data/
+delta-storage/
+mlflow-artifacts/
+mlruns/
+
+# Python ve Ortam
+__pycache__/
+*.pyc
+.env
+venv/

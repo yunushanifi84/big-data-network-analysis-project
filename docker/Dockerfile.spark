@@ -1,0 +1,24 @@
+# Temel imaj olarak Bitnami Spark kullanıyoruz (stabil ve güncel)
+FROM bitnamilegacy/spark:3.4.2
+
+# Paket yüklemek için root kullanıcısına geçiyoruz
+USER root
+
+# Planda istenilen veri bilimi ve streaming kütüphanelerinin kurulumu
+RUN pip install --no-cache-dir \
+    pyspark==3.4.2 \
+    delta-spark==2.4.0 \
+    mlflow \
+    kafka-python \
+    pandas==2.1.4 \
+    numpy==1.26.4 \
+    scikit-learn \
+    jupyterlab \
+    matplotlib \
+    seaborn
+
+# Matplotlib için writable geçici bir klasör belirliyoruz
+ENV MPLCONFIGDIR=/tmp/matplotlib
+
+# Güvenlik için tekrar varsayılan kullanıcıya dönüyoruz
+USER 1001
