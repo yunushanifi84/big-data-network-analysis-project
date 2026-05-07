@@ -110,66 +110,40 @@ Durdurmak için `Ctrl+C` kullanın.
 
 ---
 
-## ✅ Adım 6.1 Doğrulama (Hızlı Mod)
+## 🤖 Model Eğitimleri
 
-Tam veri ile doğrulama uzun sürebileceği için hızlı kontrol modunu kullanabilirsiniz:
-
-```bash
-docker exec spark-master spark-submit --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/validate_setup.py --fast --sample-size 1000
-```
-
-> `--sample-size` değerini ihtiyaca göre artırabilirsiniz (ör. `5000` veya `10000`).
-
----
-
-## 🤖 Adım 6.2 Logistic Regression Eğitimi
-
-### Hızlı eğitim (önerilen ilk test)
+### 1. Kurulum Doğrulama
 
 ```bash
-docker exec spark-master spark-submit --driver-memory 2g --executor-memory 2g --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/01_logistic_regression.py --fast --sample-size 30000
+docker exec spark-master spark-submit --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/validate_setup.py
 ```
 
-### Tam veri ile eğitim
+> Hızlı doğrulama için: `--fast --sample-size 1000` (ör. `--sample-size 5000`).
+
+### 2. Logistic Regression (Binary: Saldırı Var/Yok)
 
 ```bash
 docker exec spark-master spark-submit --driver-memory 2g --executor-memory 2g --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/01_logistic_regression.py
 ```
 
-### Daha kapsamlı cross-validation (daha yavaş)
-
-```bash
-docker exec spark-master spark-submit --driver-memory 2g --executor-memory 2g --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/01_logistic_regression.py --cv-mode full
-```
-
+> Hızlı eğitim için: `--fast --sample-size 30000`  
+> Daha kapsamlı cross-validation için: `--cv-mode full`  
 > Eğitim sonuçları ve metrikler MLflow UI'da görünür: `http://localhost:5000`
 
 ---
 
-## 🤖 Adım 6.2.B Multinomial Logistic Regression (Saldırı Tipi)
+### 3. Multinomial Logistic Regression (Saldırı Tipi)
 
 `01_logistic_regression.py` saldırı **var/yok** (binary) ayrımı yaparken,
 `01b_logistic_regression_multiclass.py` saldırının **türünü** tahmin eder
 (`Attack_type` kolonu: ör. `Normal`, `DDoS_HTTP`, `Port_Scanning`, `MITM` vb.).
 
-### Hızlı eğitim (önerilen ilk test)
-
-```bash
-docker exec spark-master spark-submit --driver-memory 2g --executor-memory 2g --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/01b_logistic_regression_multiclass.py --fast --sample-size 30000
-```
-
-### Tam veri ile eğitim
-
 ```bash
 docker exec spark-master spark-submit --driver-memory 2g --executor-memory 2g --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/01b_logistic_regression_multiclass.py
 ```
 
-### Daha kapsamlı cross-validation (daha yavaş)
-
-```bash
-docker exec spark-master spark-submit --driver-memory 2g --executor-memory 2g --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/01b_logistic_regression_multiclass.py --cv-mode full
-```
-
+> Hızlı eğitim için: `--fast --sample-size 30000`  
+> Daha kapsamlı cross-validation için: `--cv-mode full`  
 > Multi-class çıktısı: `accuracy`, `f1_score`, `weightedPrecision/Recall`, her sınıf için ayrı `precision/recall/f1` ve NxN confusion matrix MLflow'a `confusion_matrix.csv` artifact'ı olarak yazılır.
 
 ---
