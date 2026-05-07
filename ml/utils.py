@@ -481,7 +481,11 @@ def log_to_mlflow(
 #  8. Genel Pipeline Çalıştırıcı
 # ─────────────────────────────────────────────
 
-def run_ml_pipeline(spark: SparkSession) -> tuple:
+def run_ml_pipeline(
+    spark: SparkSession,
+    sample_size: int = None,
+    split_log_stats: bool = True,
+) -> tuple:
     """
     Gold veriden başlayarak ML pipeline'ın ortak adımlarını çalıştırır:
     1. Veri yükleme
@@ -491,6 +495,11 @@ def run_ml_pipeline(spark: SparkSession) -> tuple:
 
     Tüm model script'leri bu fonksiyonu çağırarak başlar.
 
+    Args:
+        spark: SparkSession
+        sample_size: Eğer verilirse, feature hazırlığı öncesi bu kadar satıra sınırlar
+        split_log_stats: split sırasında ağır count/groupBy loglarını aç/kapat
+
     Returns:
         (train_df, test_df, feature_cols): Hazır eğitim ve test setleri + feature listesi
     """
@@ -499,6 +508,11 @@ def run_ml_pipeline(spark: SparkSession) -> tuple:
 
     # 2. Gold katmanından veri yükle
     df = load_gold_data(spark)
+
+    if sample_size is not None:
+        print(f"⚡ Örneklem modu aktif: veri {sample_size:,} satır ile sınırlandırılıyor.")
+        df = df.limit(sample_size).cache()
+        _ = df.count()
 
     # 3. Feature kolonlarını belirle
     feature_cols = get_feature_columns(df)
@@ -511,7 +525,7 @@ def run_ml_pipeline(spark: SparkSession) -> tuple:
     prepared_df = add_weight_column(prepared_df, weights)
 
     # 6. Train/Test split
-    train_df, test_df = split_data(prepared_df)
+    train_df, test_df = split_data(prepared_df, log_stats=split_log_stats)
 
     # Cache — ML eğitimi sırasında tekrar tekrar okunacak
     train_df = train_df.cache()
