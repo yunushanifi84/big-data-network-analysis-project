@@ -23,7 +23,7 @@ import numpy as np
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
 from pyspark import StorageLevel
-from pyspark.ml.feature import VectorAssembler, StringIndexer
+from pyspark.ml.feature import VectorAssembler, StringIndexer, StringIndexerModel
 from pyspark.ml.evaluation import (
     BinaryClassificationEvaluator,
     MulticlassClassificationEvaluator,
@@ -534,3 +534,351 @@ def run_ml_pipeline(
 
     print(f"\n🚀 ML Pipeline hazır! Toplam: {time.perf_counter() - pipeline_start:.2f}s", flush=True)
     return train_df, test_df, feature_cols
+
+
+# ─────────────────────────────────────────────
+#  9. MULTI-CLASS (Attack_type) Yardımcıları
+# ─────────────────────────────────────────────
+#
+# Aşağıdaki fonksiyonlar binary versiyonların yanına eklenmiştir.
+# Hedef: Attack_type kolonunu (string, çok-sınıflı) etiket olarak kullanan
+# multinomial sınıflandırma pipeline'ı için ortak araçlar sağlamak.
+
+def find_attack_type_column(df: DataFrame) -> str:
+    """
+    Gold tablodaki saldırı tipi kolonunu bulur.
+    CSV/Silver akışında kolon adı 'Attack_type' veya 'attack_type' olarak
+    farklılaşabildiği için iki olasılığı da kontrol eder.
+    """
+    candidates = ["Attack_type", "attack_type"]
+    for name in candidates:
+        if name in df.columns:
+            return name
+    raise ValueError(
+        "Gold tabloda Attack_type / attack_type kolonu bulunamadı. "
+        f"Mevcut kolonlar: {df.columns}"
+    )
+
+
+def prepare_features_multiclass(
+    df: DataFrame,
+    label_col: str = None,
+    feature_cols: list = None,
+    log_stats: bool = False,
+) -> tuple:
+    """
+    Multi-class sınıflandırma için feature ve etiket hazırlığı.
+
+    Adımlar:
+    1. Sayısal feature kolonlarını seçer (binary versiyon ile aynı kural).
+    2. String tipindeki Attack_type kolonunu StringIndexer ile sayısal
+       'label' kolonuna çevirir (en yoğun sınıf 0 olur).
+    3. VectorAssembler ile 'features' vektörünü üretir.
+
+    Returns:
+        (assembled_df, label_index_model, feature_cols)
+            assembled_df: 'features' ve 'label' kolonlarına sahip DataFrame
+            label_index_model: StringIndexerModel (label index → string isim eşlemesi için)
+            feature_cols: kullanılan numerik feature kolon listesi
+    """
+    if label_col is None:
+        label_col = find_attack_type_column(df)
+
+    if feature_cols is None:
+        feature_cols = get_feature_columns(df)
+
+    print(
+        f"🔧 Multi-class feature hazırlığı: "
+        f"{len(feature_cols)} feature, label='{label_col}'"
+    )
+
+    indexer = StringIndexer(
+        inputCol=label_col,
+        outputCol="label",
+        handleInvalid="keep",
+        stringOrderType="frequencyDesc",
+    )
+    label_index_model = indexer.fit(df.select(label_col))
+
+    select_exprs = [
+        F.coalesce(
+            F.when(F.isnan(F.col(c).cast("double")), F.lit(0.0))
+             .otherwise(F.col(c).cast("double")),
+            F.lit(0.0),
+        ).alias(c)
+        for c in feature_cols
+    ]
+    select_exprs.append(F.col(label_col))
+    df_typed = df.select(*select_exprs)
+
+    indexed_df = label_index_model.transform(df_typed)
+
+    assembler = VectorAssembler(
+        inputCols=feature_cols,
+        outputCol="features",
+        handleInvalid="skip",
+    )
+    assembled_df = assembler.transform(indexed_df).select("features", "label")
+    assembled_df = assembled_df.filter(F.col("label").isNotNull())
+
+    print(f"   ✅ Multi-class hazırlık tamam (sınıf sayısı: {len(label_index_model.labels)}).")
+    print("   📚 Sınıf eşlemesi (label index → orijinal isim):")
+    for idx, name in enumerate(label_index_model.labels):
+        print(f"      {idx:>2} → {name}")
+
+    if log_stats:
+        final_count = assembled_df.count()
+        print(f"   📊 Feature sonrası satır sayısı: {final_count:,}")
+
+    return assembled_df, label_index_model, feature_cols
+
+
+def compute_class_weights_multiclass(df: DataFrame, label_col: str = "label") -> dict:
+    """
+    N sınıflı dengesizlik için ağırlık hesaplar (sklearn 'balanced' formülü):
+        weight = total / (n_classes * count_of_class)
+    """
+    label_counts = df.groupBy(label_col).count().collect()
+    total = sum(row["count"] for row in label_counts)
+    n_classes = len(label_counts)
+
+    weights = {}
+    for row in label_counts:
+        label_val = float(row[label_col])
+        count = row["count"]
+        weights[label_val] = total / (n_classes * count) if count > 0 else 1.0
+
+    print(f"⚖️  Multi-class sınıf ağırlıkları (n={n_classes}):")
+    for label_val, weight in sorted(weights.items()):
+        print(f"   label={int(label_val):>2}  weight={weight:.4f}")
+
+    return weights
+
+
+def add_weight_column_multiclass(
+    df: DataFrame,
+    weights: dict,
+    label_col: str = "label",
+) -> DataFrame:
+    """
+    Çoklu sınıflar için 'classWeight' kolonu ekler.
+    F.create_map ile tek bir lookup yapılır (binary versiyondaki zincirleme
+    when() yerine N sınıfta daha temiz çalışır).
+    """
+    if not weights:
+        return df.withColumn("classWeight", F.lit(1.0))
+
+    map_pairs = []
+    for label_val, weight in weights.items():
+        map_pairs.append(F.lit(float(label_val)))
+        map_pairs.append(F.lit(float(weight)))
+
+    weight_map = F.create_map(*map_pairs)
+    return df.withColumn(
+        "classWeight",
+        F.coalesce(weight_map.getItem(F.col(label_col).cast("double")), F.lit(1.0)),
+    )
+
+
+def evaluate_model_multiclass(predictions: DataFrame, num_classes: int) -> dict:
+    """
+    Multi-class metrikleri hesaplar.
+
+    Hesaplananlar:
+        - accuracy
+        - f1_score (weighted)
+        - precision (weighted)
+        - recall (weighted)
+        - log_loss (varsa probability kolonu)
+        - per-class precision/recall/f1 (label başına)
+
+    Not: AUC-ROC binary'ye özgü olduğundan multi-class baz sette hesaplanmaz.
+    İhtiyaç olursa One-vs-Rest ile ayrıca eklenebilir.
+    """
+    metrics = {}
+    mc_eval = MulticlassClassificationEvaluator(
+        labelCol="label", predictionCol="prediction"
+    )
+
+    mc_eval.setMetricName("accuracy")
+    metrics["accuracy"] = mc_eval.evaluate(predictions)
+
+    mc_eval.setMetricName("f1")
+    metrics["f1_score"] = mc_eval.evaluate(predictions)
+
+    mc_eval.setMetricName("weightedPrecision")
+    metrics["precision"] = mc_eval.evaluate(predictions)
+
+    mc_eval.setMetricName("weightedRecall")
+    metrics["recall"] = mc_eval.evaluate(predictions)
+
+    try:
+        mc_eval.setMetricName("logLoss")
+        metrics["log_loss"] = mc_eval.evaluate(predictions)
+    except Exception:
+        pass
+
+    print("\n📊 Multi-class Değerlendirme Sonuçları:")
+    print(f"   {'Metrik':<20} {'Değer':>10}")
+    print(f"   {'─'*30}")
+    for name, value in metrics.items():
+        print(f"   {name:<20} {value:>10.4f}")
+
+    per_class_eval = MulticlassClassificationEvaluator(
+        labelCol="label", predictionCol="prediction"
+    )
+    print("\n   Per-class metrikler:")
+    print(f"   {'label':<6} {'precision':>10} {'recall':>10} {'f1':>10}")
+    for c in range(num_classes):
+        per_class_eval.setMetricLabel(float(c))
+        try:
+            per_class_eval.setMetricName("precisionByLabel")
+            p = per_class_eval.evaluate(predictions)
+            per_class_eval.setMetricName("recallByLabel")
+            r = per_class_eval.evaluate(predictions)
+            per_class_eval.setMetricName("fMeasureByLabel")
+            f = per_class_eval.evaluate(predictions)
+        except Exception:
+            p, r, f = 0.0, 0.0, 0.0
+
+        metrics[f"precision_class_{c}"] = p
+        metrics[f"recall_class_{c}"] = r
+        metrics[f"f1_class_{c}"] = f
+        print(f"   {c:<6} {p:>10.4f} {r:>10.4f} {f:>10.4f}")
+
+    return metrics
+
+
+def compute_confusion_matrix_multiclass(
+    predictions: DataFrame,
+    label_names: list,
+) -> dict:
+    """
+    NxN confusion matrix üretir ve label isimleriyle yazdırır.
+
+    Returns:
+        dict:
+            "matrix"        : list[list[int]]  — confusion matrisi (label_names sırasında)
+            "labels"        : list[str]        — sınıf isimleri (index sırası)
+            "row_totals"    : list[int]        — her gerçek sınıfın toplamı
+            "per_class_acc" : list[float]      — per-class doğruluk (recall)
+    """
+    n = len(label_names)
+    cm_rows = (
+        predictions
+        .groupBy("label", "prediction")
+        .count()
+        .collect()
+    )
+
+    matrix = [[0 for _ in range(n)] for _ in range(n)]
+    for row in cm_rows:
+        label_idx = int(row["label"])
+        pred_idx = int(row["prediction"])
+        if 0 <= label_idx < n and 0 <= pred_idx < n:
+            matrix[label_idx][pred_idx] = int(row["count"])
+
+    row_totals = [sum(row) for row in matrix]
+    per_class_acc = [
+        (matrix[i][i] / row_totals[i]) if row_totals[i] > 0 else 0.0
+        for i in range(n)
+    ]
+
+    name_width = max((len(name) for name in label_names), default=8)
+    name_width = min(max(name_width, 8), 24)
+
+    print("\n🔲 Multi-class Confusion Matrix:")
+    header = " " * (name_width + 2) + "│ " + "  ".join(
+        f"{name[:name_width]:>{name_width}}" for name in label_names
+    )
+    print(header)
+    print("─" * len(header))
+    for i, name in enumerate(label_names):
+        row_cells = "  ".join(f"{matrix[i][j]:>{name_width}}" for j in range(n))
+        print(f" {name[:name_width]:<{name_width}} │ {row_cells}   (total={row_totals[i]:,}, acc={per_class_acc[i]*100:.1f}%)")
+
+    return {
+        "matrix": matrix,
+        "labels": list(label_names),
+        "row_totals": row_totals,
+        "per_class_acc": per_class_acc,
+    }
+
+
+def run_ml_pipeline_multiclass(
+    spark: SparkSession,
+    sample_size: int = None,
+    split_log_stats: bool = True,
+) -> tuple:
+    """
+    Multi-class versiyonu için ortak ML pipeline.
+    Binary `run_ml_pipeline` ile aynı iskelet, fakat label kolonu Attack_type
+    (StringIndexer ile encode edilir).
+
+    Returns:
+        (train_df, test_df, feature_cols, label_index_model)
+    """
+    pipeline_start = time.perf_counter()
+    print("\n🧱 Multi-class ML pipeline başlatıldı...", flush=True)
+
+    stage_start = time.perf_counter()
+    init_mlflow()
+    print(f"   ⏱️ MLflow: {time.perf_counter() - stage_start:.2f}s", flush=True)
+
+    stage_start = time.perf_counter()
+    df = load_gold_data(spark, log_stats=False)
+    print(f"   ⏱️ Gold okuma (lazy): {time.perf_counter() - stage_start:.2f}s", flush=True)
+
+    feature_cols = get_feature_columns(df)
+    label_col = find_attack_type_column(df)
+
+    stage_start = time.perf_counter()
+    print(f"   ⏳ [1] prepare_features_multiclass (lazy)...", flush=True)
+    prepared_df, label_index_model, feature_cols = prepare_features_multiclass(
+        df, label_col=label_col, feature_cols=feature_cols, log_stats=False
+    )
+    print(f"   ✅ [1] prepare_features_multiclass: {time.perf_counter() - stage_start:.2f}s", flush=True)
+
+    stage_start = time.perf_counter()
+    print(f"   ⏳ [2] Tek seferlik MATERIALIZE (coalesce + persist + count)...", flush=True)
+    target_partitions = 4 if sample_size and sample_size <= 50000 else 8
+    if sample_size is not None:
+        total_count = df.count()
+        fraction = min(sample_size / total_count, 1.0)
+        print(f"   ⚡ Örneklem: {total_count:,} → ~{sample_size:,} satır (frac={fraction:.4f})", flush=True)
+        prepared_df = prepared_df.sample(withReplacement=False, fraction=fraction, seed=42)
+
+    prepared_df = prepared_df.coalesce(target_partitions).persist(StorageLevel.MEMORY_AND_DISK)
+    materialized_count = prepared_df.count()
+    print(f"   ✅ [2] Materialize tamam: {materialized_count:,} satır, {time.perf_counter() - stage_start:.2f}s", flush=True)
+
+    stage_start = time.perf_counter()
+    print(f"   ⏳ [3] Multi-class class weights...", flush=True)
+    weights = compute_class_weights_multiclass(prepared_df)
+    prepared_df = add_weight_column_multiclass(prepared_df, weights)
+    print(f"   ✅ [3] Weights: {time.perf_counter() - stage_start:.2f}s", flush=True)
+
+    stage_start = time.perf_counter()
+    print(f"   ⏳ [4] randomSplit (cached'ten)...", flush=True)
+    train_df, test_df = split_data(prepared_df, log_stats=False, stratified=True)
+    train_df = train_df.persist(StorageLevel.MEMORY_AND_DISK)
+    test_df = test_df.persist(StorageLevel.MEMORY_AND_DISK)
+    train_count = train_df.count()
+    test_count = test_df.count()
+    print(f"   ✅ [4] Train: {train_count:,} | Test: {test_count:,} ({time.perf_counter() - stage_start:.2f}s)", flush=True)
+
+    if split_log_stats:
+        print("\n   Sınıf dağılımı (train+test):")
+        dist_rows = (
+            prepared_df.groupBy("label").count().orderBy("label").collect()
+        )
+        labels = label_index_model.labels
+        for row in dist_rows:
+            idx = int(row["label"])
+            name = labels[idx] if 0 <= idx < len(labels) else f"label_{idx}"
+            print(f"   {idx:>2}  {name:<25} {row['count']:>12,}")
+
+    prepared_df.unpersist()
+
+    print(f"\n🚀 Multi-class ML Pipeline hazır! Toplam: {time.perf_counter() - pipeline_start:.2f}s", flush=True)
+    return train_df, test_df, feature_cols, label_index_model

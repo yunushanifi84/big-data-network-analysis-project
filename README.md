@@ -170,6 +170,34 @@ docker exec spark-master spark-submit --driver-memory 2g --executor-memory 2g --
 
 ---
 
+## 🤖 Adım 6.2.B Multinomial Logistic Regression (Saldırı Tipi)
+
+`01_logistic_regression.py` saldırı **var/yok** (binary) ayrımı yaparken,
+`01b_logistic_regression_multiclass.py` saldırının **türünü** tahmin eder
+(`Attack_type` kolonu: ör. `Normal`, `DDoS_HTTP`, `Port_Scanning`, `MITM` vb.).
+
+### Hızlı eğitim (önerilen ilk test)
+
+```bash
+docker exec spark-master spark-submit --driver-memory 2g --executor-memory 2g --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/01b_logistic_regression_multiclass.py --fast --sample-size 30000
+```
+
+### Tam veri ile eğitim
+
+```bash
+docker exec spark-master spark-submit --driver-memory 2g --executor-memory 2g --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/01b_logistic_regression_multiclass.py
+```
+
+### Daha kapsamlı cross-validation (daha yavaş)
+
+```bash
+docker exec spark-master spark-submit --driver-memory 2g --executor-memory 2g --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/01b_logistic_regression_multiclass.py --cv-mode full
+```
+
+> Multi-class çıktısı: `accuracy`, `f1_score`, `weightedPrecision/Recall`, her sınıf için ayrı `precision/recall/f1` ve NxN confusion matrix MLflow'a `confusion_matrix.csv` artifact'ı olarak yazılır.
+
+---
+
 ## 🛠️ Sorun Giderme
 
 - **Kafka bağlantı hatası:** Kafka container'ının tamamen başladığından emin olun (`docker logs kafka`). Başlatma 10-15 saniye sürebilir.
