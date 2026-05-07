@@ -65,10 +65,14 @@ docker exec -it kafka kafka-topics.sh --list --bootstrap-server localhost:9092
 Producer, CSV dosyasındaki ağ trafiği verilerini Kafka'ya gerçek zamanlı simülasyon olarak gönderir. `--rate` parametresi ile saniyedeki mesaj sayısını ayarlayabilirsiniz:
 
 ```bash
-docker compose up kafka-producer
+docker compose up --build kafka-producer
 ```
 
-> **Not:** Producer varsayılan olarak saniyede 50 mesaj gönderir. Hızı değiştirmek isterseniz `docker-compose.yml` içindeki producer servisine `command: python kafka/producer.py --rate 100` gibi bir parametre ekleyebilirsiniz.
+> **Not:** Producer parametreleri `docker-compose.yml` içindeki `kafka-producer.command` alanından yönetilir.
+> Örnekler:
+> - Gecikmesiz tam hız: `--no-delay`
+> - Mesaj limiti: `--max-messages 5000` (0 = sınırsız)
+> - Hız limiti: `--rate 100` (no-delay kapalıysa geçerli)
 
 ### 3. Spark Streaming Pipeline (Bronze → Silver → Gold)
 
@@ -139,6 +143,30 @@ docker exec spark-master spark-submit --packages io.delta:delta-core_2.12:2.4.0 
 ```
 
 > `--sample-size` değerini ihtiyaca göre artırabilirsiniz (ör. `5000` veya `10000`).
+
+---
+
+## 🤖 Adım 6.2 Logistic Regression Eğitimi
+
+### Hızlı eğitim (önerilen ilk test)
+
+```bash
+docker exec spark-master spark-submit --driver-memory 2g --executor-memory 2g --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/01_logistic_regression.py --fast --sample-size 30000
+```
+
+### Tam veri ile eğitim
+
+```bash
+docker exec spark-master spark-submit --driver-memory 2g --executor-memory 2g --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/01_logistic_regression.py
+```
+
+### Daha kapsamlı cross-validation (daha yavaş)
+
+```bash
+docker exec spark-master spark-submit --driver-memory 2g --executor-memory 2g --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/01_logistic_regression.py --cv-mode full
+```
+
+> Eğitim sonuçları ve metrikler MLflow UI'da görünür: `http://localhost:5000`
 
 ---
 
