@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IoT Intrusion Detection — Real-Time Pipeline</title>
+    <meta name="description" content="IoT ağ trafiği saldırı tespit sistemi gerçek zamanlı streaming dashboard">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg: #0a0e1a;
+            --surface: rgba(255,255,255,0.04);
+            --glass: rgba(255,255,255,0.06);
+            --border: rgba(255,255,255,0.08);
+            --text: #e2e8f0;
+            --text-dim: #64748b;
+            --accent-kafka: #ff6b35;
+            --accent-spark: #38bdf8;
+            --accent-bronze: #d97706;
+            --accent-silver: #94a3b8;
+            --accent-gold: #facc15;
+            --accent-green: #22c55e;
+            --accent-red: #ef4444;
+            --glow-kafka: 0 0 30px rgba(255,107,53,0.3);
+            --glow-spark: 0 0 30px rgba(56,189,248,0.3);
+            --glow-bronze: 0 0 30px rgba(217,119,6,0.3);
+            --glow-silver: 0 0 30px rgba(148,163,184,0.3);
+            --glow-gold: 0 0 30px rgba(250,204,21,0.3);
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* ── BG GRID ── */
+        body::before {
+            content: '';
+            position: fixed; inset: 0;
+            background-image:
+                linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+            background-size: 60px 60px;
+            z-index: 0;
+        }
+
+        .app { position: relative; z-index: 1; padding: 24px 32px; max-width: 1440px; margin: 0 auto; }
+
+        /* ── HEADER ── */
+        .header {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 32px; padding-bottom: 20px;
+            border-bottom: 1px solid var(--border);
+        }
+        .header h1 {
+            font-size: 22px; font-weight: 700; letter-spacing: -0.5px;
+            background: linear-gradient(135deg, #38bdf8, #a78bfa);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .header .subtitle { font-size: 13px; color: var(--text-dim); margin-top: 2px; }
+        .status-badge {
+            display: flex; align-items: center; gap: 8px;
+            background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.25);
+            padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 500; color: var(--accent-green);
+        }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-green); animation: pulse-dot 2s infinite; }
+        @keyframes pulse-dot { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.3)} }
+
+        /* ── PIPELINE SECTION ── */
+        .section-title {
+            font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px;
+            color: var(--text-dim); margin-bottom: 16px;
+        }
+
+        .pipeline-container {
+            display: flex; align-items: center; gap: 0;
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 16px; padding: 28px 24px;
+            margin-bottom: 28px; position: relative; overflow: hidden;
+        }
+
+        .pipeline-node {
+            flex: 1; display: flex; flex-direction: column; align-items: center;
+            position: relative; z-index: 2;
+        }
+        .node-icon {
+            width: 56px; height: 56px; border-radius: 14px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 22px; font-weight: 700; margin-bottom: 10px;
+            transition: transform 0.3s, box-shadow 0.3s;
+            cursor: default;
+        }
+        .node-icon:hover { transform: translateY(-4px) scale(1.08); }
+        .node-icon.csv { background: rgba(139,92,246,0.15); border: 1px solid rgba(139,92,246,0.3); color: #a78bfa; }
+        .node-icon.kafka { background: rgba(255,107,53,0.15); border: 1px solid rgba(255,107,53,0.3); color: var(--accent-kafka); }
+        .node-icon.kafka:hover { box-shadow: var(--glow-kafka); }
+        .node-icon.spark { background: rgba(56,189,248,0.15); border: 1px solid rgba(56,189,248,0.3); color: var(--accent-spark); }
+        .node-icon.spark:hover { box-shadow: var(--glow-spark); }
+        .node-icon.bronze { background: rgba(217,119,6,0.12); border: 1px solid rgba(217,119,6,0.3); color: var(--accent-bronze); }
+        .node-icon.bronze:hover { box-shadow: var(--glow-bronze); }
+        .node-icon.silver { background: rgba(148,163,184,0.12); border: 1px solid rgba(148,163,184,0.3); color: var(--accent-silver); }
+        .node-icon.silver:hover { box-shadow: var(--glow-silver); }
+        .node-icon.gold { background: rgba(250,204,21,0.12); border: 1px solid rgba(250,204,21,0.3); color: var(--accent-gold); }
+        .node-icon.gold:hover { box-shadow: var(--glow-gold); }
+
+        .node-label { font-size: 12px; font-weight: 600; margin-bottom: 2px; }
+        .node-sub { font-size: 10px; color: var(--text-dim); }
+        .node-count { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 500; margin-top: 6px; color: var(--accent-green); }
+
+        /* ── ARROWS BETWEEN NODES ── */
+        .arrow-container {
+            width: 60px; display: flex; align-items: center; justify-content: center;
+            position: relative; z-index: 2; flex-shrink: 0;
+        }
+        .arrow-track {
+            width: 100%; height: 2px; background: var(--border); border-radius: 1px;
+            position: relative; overflow: hidden;
+        }
+        .arrow-particle {
+            position: absolute; top: -2px; left: -10px;
+            width: 10px; height: 6px; border-radius: 3px;
+            animation: flow-particle 1.2s linear infinite;
+        }
+        .arrow-particle.kafka-col { background: var(--accent-kafka); box-shadow: 0 0 8px var(--accent-kafka); }
+        .arrow-particle.spark-col { background: var(--accent-spark); box-shadow: 0 0 8px var(--accent-spark); }
+        .arrow-particle.bronze-col { background: var(--accent-bronze); box-shadow: 0 0 8px var(--accent-bronze); }
+        .arrow-particle.silver-col { background: var(--accent-silver); box-shadow: 0 0 8px var(--accent-silver); }
+        .arrow-particle.gold-col { background: var(--accent-gold); box-shadow: 0 0 8px var(--accent-gold); }
+
+        @keyframes flow-particle {
+            0% { left: -10px; opacity: 0; }
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { left: 100%; opacity: 0; }
+        }
+
+        /* ── METRICS GRID ── */
+        .metrics-grid {
+            display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;
+            margin-bottom: 28px;
+        }
+        .metric-card {
+            background: var(--glass); border: 1px solid var(--border);
+            border-radius: 14px; padding: 20px;
+            transition: transform 0.2s, border-color 0.3s;
+        }
+        .metric-card:hover { transform: translateY(-2px); border-color: rgba(255,255,255,0.15); }
+        .metric-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+        .metric-value { font-family: 'JetBrains Mono', monospace; font-size: 28px; font-weight: 700; }
+        .metric-sub { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+        .metric-value.green { color: var(--accent-green); }
+        .metric-value.blue { color: var(--accent-spark); }
+        .metric-value.orange { color: var(--accent-kafka); }
+        .metric-value.gold { color: var(--accent-gold); }
+
+        /* ── BOTTOM PANELS ── */
+        .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .panel {
+            background: var(--glass); border: 1px solid var(--border);
+            border-radius: 14px; padding: 20px; min-height: 300px;
+        }
+        .panel-header {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border);
+        }
+        .panel-title { font-size: 13px; font-weight: 600; }
+
+        /* ── LIVE LOG ── */
+        .log-feed { max-height: 240px; overflow-y: auto; scroll-behavior: smooth; }
+        .log-feed::-webkit-scrollbar { width: 4px; }
+        .log-feed::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+        .log-entry {
+            display: flex; align-items: flex-start; gap: 10px;
+            padding: 6px 0; font-size: 12px; font-family: 'JetBrains Mono', monospace;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+            animation: log-in 0.3s ease-out;
+        }
+        @keyframes log-in { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
+        .log-time { color: var(--text-dim); white-space: nowrap; flex-shrink: 0; }
+        .log-tag {
+            padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 600;
+            white-space: nowrap; flex-shrink: 0;
+        }
+        .log-tag.normal { background: rgba(34,197,94,0.15); color: var(--accent-green); }
+        .log-tag.attack { background: rgba(239,68,68,0.15); color: var(--accent-red); }
+        .log-msg { color: var(--text); word-break: break-all; }
+
+        /* ── ATTACK CHART ── */
+        .attack-bars { display: flex; flex-direction: column; gap: 10px; }
+        .attack-row { display: flex; align-items: center; gap: 12px; }
+        .attack-name { font-size: 11px; width: 130px; flex-shrink: 0; color: var(--text-dim); }
+        .attack-bar-bg {
+            flex: 1; height: 22px; background: rgba(255,255,255,0.04);
+            border-radius: 6px; overflow: hidden; position: relative;
+        }
+        .attack-bar-fill {
+            height: 100%; border-radius: 6px;
+            transition: width 0.8s cubic-bezier(0.22,1,0.36,1);
+            position: relative;
+        }
+        .attack-bar-fill::after {
+            content: ''; position: absolute; inset: 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15));
+        }
+        .attack-count { font-family: 'JetBrains Mono', monospace; font-size: 11px; width: 50px; text-align: right; flex-shrink: 0; }
+
+        /* ── FOOTER ── */
+        .footer {
+            margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--border);
+            display: flex; justify-content: space-between;
+            font-size: 11px; color: var(--text-dim);
+        }
+
+        /* ── CLICKABLE NODES ── */
+        .pipeline-node.clickable { cursor: pointer; }
+        .pipeline-node.clickable .node-icon { position: relative; }
+        .pipeline-node.clickable .node-icon::after {
+            content: '🔍'; position: absolute; bottom: -4px; right: -4px;
+            font-size: 10px; background: var(--bg); border-radius: 50%;
+            width: 16px; height: 16px; display: flex; align-items: center; justify-content: center;
+            opacity: 0; transition: opacity 0.2s;
+        }
+        .pipeline-node.clickable:hover .node-icon::after { opacity: 1; }
+
+        /* ── MODAL ── */
+        .modal-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+            backdrop-filter: blur(8px); z-index: 100;
+            display: none; align-items: center; justify-content: center;
+            animation: modal-fade 0.25s ease-out;
+        }
+        .modal-overlay.active { display: flex; }
+        @keyframes modal-fade { from{opacity:0} to{opacity:1} }
+        .modal {
+            background: #111827; border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px; width: 90vw; max-width: 1100px; max-height: 80vh;
+            display: flex; flex-direction: column; overflow: hidden;
+            animation: modal-slide 0.3s cubic-bezier(0.22,1,0.36,1);
+        }
+        @keyframes modal-slide { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+        .modal-top {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 16px 20px; border-bottom: 1px solid var(--border);
+        }
+        .modal-title { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+        .modal-close {
+            background: rgba(255,255,255,0.06); border: 1px solid var(--border);
+            color: var(--text); width: 32px; height: 32px; border-radius: 8px;
+            font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+            transition: background 0.2s;
+        }
+        .modal-close:hover { background: rgba(239,68,68,0.2); }
+        .modal-info { padding: 12px 20px; font-size: 12px; color: var(--text-dim); border-bottom: 1px solid var(--border); }
+        .modal-body { overflow: auto; padding: 0; flex: 1; }
+        .modal-body::-webkit-scrollbar { width: 6px; height: 6px; }
+        .modal-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+        .data-table {
+            width: 100%; border-collapse: collapse; font-size: 11px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .data-table thead { position: sticky; top: 0; z-index: 2; }
+        .data-table th {
+            background: #1a2332; padding: 10px 12px; text-align: left;
+            font-weight: 600; color: var(--accent-spark); white-space: nowrap;
+            border-bottom: 2px solid rgba(56,189,248,0.2);
+        }
+        .data-table td {
+            padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.04);
+            white-space: nowrap; max-width: 200px; overflow: hidden; text-overflow: ellipsis;
+            color: var(--text);
+        }
+        .data-table tr:hover td { background: rgba(255,255,255,0.03); }
+        .modal-empty { padding: 40px; text-align: center; color: var(--text-dim); font-size: 14px; }
+    </style>
+</head>
+<body>
+<div class="app">
+    <!-- HEADER -->
+    <header class="header">
+        <div>
+            <h1>🛡️ IoT Network Intrusion Detection</h1>
+            <div class="subtitle">Real-Time Streaming Pipeline — Big Data Final Project</div>
+        </div>
+        <div class="status-badge"><span class="status-dot"></span> Pipeline Active</div>
+    </header>
+
+    <!-- PIPELINE FLOW -->
+    <div class="section-title">Data Pipeline Architecture</div>
+    <div class="pipeline-container">
+        <div class="pipeline-node">
+            <div class="node-icon csv">📄</div>
+            <div class="node-label">CSV Dataset</div>
+            <div class="node-sub">ML-EdgeIIoT</div>
+            <div class="node-count">1,048,575</div>
+        </div>
+        <div class="arrow-container"><div class="arrow-track"><div class="arrow-particle kafka-col"></div></div></div>
+        <div class="pipeline-node">
+            <div class="node-icon kafka">K</div>
+            <div class="node-label">Kafka</div>
+            <div class="node-sub">iot-network-traffic</div>
+            <div class="node-count" id="kafka-count">0</div>
+        </div>
+        <div class="arrow-container"><div class="arrow-track"><div class="arrow-particle spark-col"></div></div></div>
+        <div class="pipeline-node">
+            <div class="node-icon spark">⚡</div>
+            <div class="node-label">Spark Streaming</div>
+            <div class="node-sub">Structured Streaming</div>
+            <div class="node-count" id="spark-count">0</div>
+        </div>
+        <div class="arrow-container"><div class="arrow-track"><div class="arrow-particle bronze-col"></div></div></div>
+        <div class="pipeline-node clickable" onclick="openLayerModal('bronze')">
+            <div class="node-icon bronze">🥉</div>
+            <div class="node-label">Bronze</div>
+            <div class="node-sub">Raw Data (Delta)</div>
+            <div class="node-count" id="bronze-count">0</div>
+        </div>
+        <div class="arrow-container"><div class="arrow-track"><div class="arrow-particle silver-col"></div></div></div>
+        <div class="pipeline-node clickable" onclick="openLayerModal('silver')">
+            <div class="node-icon silver">🥈</div>
+            <div class="node-label">Silver</div>
+            <div class="node-sub">Cleaned (Delta)</div>
+            <div class="node-count" id="silver-count">0</div>
+        </div>
+        <div class="arrow-container"><div class="arrow-track"><div class="arrow-particle gold-col"></div></div></div>
+        <div class="pipeline-node clickable" onclick="openLayerModal('gold')">
+            <div class="node-icon gold">🥇</div>
+            <div class="node-label">Gold</div>
+            <div class="node-sub">ML-Ready (Delta)</div>
+            <div class="node-count" id="gold-count">0</div>
+        </div>
+    </div>
+
+    <!-- METRICS -->
+    <div class="section-title">Live Metrics</div>
+    <div class="metrics-grid">
+        <div class="metric-card">
+            <div class="metric-label">Messages / sec</div>
+            <div class="metric-value orange" id="msg-rate">50</div>
+            <div class="metric-sub">Kafka throughput</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Total Processed</div>
+            <div class="metric-value green" id="total-processed">0</div>
+            <div class="metric-sub">End-to-end records</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Features Generated</div>
+            <div class="metric-value gold">5</div>
+            <div class="metric-sub">Gold layer features</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Attack Detection</div>
+            <div class="metric-value blue" id="attack-pct">0%</div>
+            <div class="metric-sub">Anomalous traffic ratio</div>
+        </div>
+    </div>
+
+    <!-- BOTTOM PANELS -->
+    <div class="panels">
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">📡 Live Message Feed</div>
+                <div style="font-size:11px;color:var(--text-dim)" id="feed-status">Streaming...</div>
+            </div>
+            <div class="log-feed" id="log-feed"></div>
+        </div>
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">🎯 Attack Type Distribution</div>
+                <div style="font-size:11px;color:var(--text-dim)" id="attack-total">0 attacks</div>
+            </div>
+            <div class="attack-bars" id="attack-bars"></div>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <span>Spark 3.4.2 · Kafka 3.4.1 · Delta Lake 2.4.0</span>
+        <span id="clock"></span>
+    </footer>
+</div>
+
+<!-- LAYER DATA MODAL -->
+<div class="modal-overlay" id="layer-modal" onclick="if(event.target===this)closeModal()">
+    <div class="modal">
+        <div class="modal-top">
+            <div class="modal-title" id="modal-title">Loading...</div>
+            <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <div class="modal-info" id="modal-info"></div>
+        <div class="modal-body" id="modal-body"></div>
+    </div>
+</div>
+
+<script>
+// ── CONFIG ──
+const API_URL = "http://localhost:5001/api/stats";
+let isLive = false; // API'ye bağlı mı, değil mi?
+let lastSeenMessages = new Set();
+
+// ── ATTACK COLORS ──
+const ATTACK_COLORS = {
+    'DDoS_UDP': '#ef4444', 'DDoS_ICMP': '#f97316', 'DDoS_TCP': '#eab308',
+    'SQL_injection': '#a855f7', 'Vulnerability_scanner': '#ec4899', 'DDoS_HTTP': '#14b8a6',
+    'Uploading': '#6366f1', 'Backdoor': '#f43f5e', 'Port_Scanning': '#0ea5e9',
+    'XSS': '#84cc16', 'Fingerprinting': '#06b6d4', 'MITM': '#f59e0b',
+    'Ransomware': '#dc2626', 'Password': '#8b5cf6', 'Normal': '#22c55e'
+};
+function getColor(name) {
+    return ATTACK_COLORS[name] || '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6,'0');
+}
+
+// ── FORMATTERS ──
+const fmt = n => (n || 0).toLocaleString('en-US');
+const pad = n => String(n).padStart(2, '0');
+const nowStr = () => { const d = new Date(); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
+
+// ── MOCK STATE (fallback when API is offline) ──
+let mockState = { kafka: 0, spark: 0, bronze: 0, silver: 0, gold: 0, totalAttacks: 0 };
+let mockAttacks = {};
+const MOCK_IPS = ['192.168.0.13','192.168.0.24','10.0.0.5','172.16.0.1','192.168.1.100'];
+const MOCK_TYPES = ['DDoS_UDP','DDoS_ICMP','DDoS_TCP','SQL_injection','Port_Scanning','XSS','Backdoor','Normal','Normal','Normal'];
+
+// ── FETCH FROM API ──
+async function fetchStats() {
+    try {
+        const res = await fetch(API_URL, { signal: AbortSignal.timeout(2000) });
+        if (!res.ok) throw new Error('not ok');
+        const data = await res.json();
+
+        if (!isLive) {
+            isLive = true;
+            document.querySelector('.status-badge').innerHTML = '<span class="status-dot"></span> 🟢 LIVE — Kafka Connected';
+            document.getElementById('feed-status').textContent = 'Live from Kafka';
+        }
+
+        // Update counters
+        document.getElementById('kafka-count').textContent = fmt(data.kafka_count);
+        document.getElementById('spark-count').textContent = fmt(data.spark_count);
+        document.getElementById('bronze-count').textContent = fmt(data.bronze_count);
+        document.getElementById('silver-count').textContent = fmt(data.silver_count);
+        document.getElementById('gold-count').textContent = fmt(data.gold_count);
+        document.getElementById('msg-rate').textContent = data.msg_rate || 0;
+        document.getElementById('total-processed').textContent = fmt(data.gold_count);
+        document.getElementById('attack-pct').textContent = data.attack_pct + '%';
+
+        // Attack bars
+        updateAttackBars(data.attack_counts || {});
+
+        // Live feed — only add NEW messages
+        const feed = document.getElementById('log-feed');
+        const msgs = (data.recent_messages || []).slice(0, 10);
+        msgs.reverse().forEach(m => {
+            const key = m.time + m.src + m.dst;
+            if (lastSeenMessages.has(key)) return;
+            lastSeenMessages.add(key);
+            if (lastSeenMessages.size > 200) {
+                const first = lastSeenMessages.values().next().value;
+                lastSeenMessages.delete(first);
+            }
+            const el = document.createElement('div');
+            el.className = 'log-entry';
+            const isNormal = m.attack === 'Normal';
+            const tag = isNormal
+                ? '<span class="log-tag normal">Normal</span>'
+                : `<span class="log-tag attack">${m.attack}</span>`;
+            el.innerHTML = `<span class="log-time">${m.time?.split('T')[1]?.substring(0,8) || nowStr()}</span>${tag}<span class="log-msg">${m.src} → ${m.dst}</span>`;
+            feed.prepend(el);
+            while (feed.children.length > 40) feed.removeChild(feed.lastChild);
+        });
+
+    } catch (e) {
+        // API offline — fallback to mock
+        if (isLive) {
+            isLive = false;
+            document.querySelector('.status-badge').innerHTML = '<span class="status-dot"></span> Simulation Mode';
+            document.getElementById('feed-status').textContent = 'Simulated data';
+        }
+        mockTick();
+    }
+}
+
+// ── MOCK TICK (fallback) ──
+function mockTick() {
+    const batch = Math.floor(Math.random() * 30) + 35;
+    mockState.kafka += batch;
+    mockState.spark += batch;
+    mockState.bronze += batch;
+    mockState.silver += Math.floor(batch * 0.97);
+    mockState.gold += Math.floor(batch * 0.97);
+
+    document.getElementById('kafka-count').textContent = fmt(mockState.kafka);
+    document.getElementById('spark-count').textContent = fmt(mockState.spark);
+    document.getElementById('bronze-count').textContent = fmt(mockState.bronze);
+    document.getElementById('silver-count').textContent = fmt(mockState.silver);
+    document.getElementById('gold-count').textContent = fmt(mockState.gold);
+    document.getElementById('total-processed').textContent = fmt(mockState.gold);
+    document.getElementById('msg-rate').textContent = batch;
+
+    const type = MOCK_TYPES[Math.floor(Math.random() * MOCK_TYPES.length)];
+    mockAttacks[type] = (mockAttacks[type] || 0) + Math.floor(Math.random() * 3) + 1;
+    if (type !== 'Normal') mockState.totalAttacks++;
+    const pct = mockState.kafka > 0 ? ((mockState.totalAttacks / mockState.kafka) * 100 * 8).toFixed(1) : 0;
+    document.getElementById('attack-pct').textContent = Math.min(pct, 34.2) + '%';
+
+    updateAttackBars(mockAttacks);
+
+    // Mock log
+    const src = MOCK_IPS[Math.floor(Math.random() * MOCK_IPS.length)];
+    const dst = MOCK_IPS[Math.floor(Math.random() * MOCK_IPS.length)];
+    const feed = document.getElementById('log-feed');
+    const el = document.createElement('div');
+    el.className = 'log-entry';
+    const isNormal = type === 'Normal';
+    const tag = isNormal ? '<span class="log-tag normal">Normal</span>' : `<span class="log-tag attack">${type}</span>`;
+    el.innerHTML = `<span class="log-time">${nowStr()}</span>${tag}<span class="log-msg">${src} → ${dst}</span>`;
+    feed.prepend(el);
+    while (feed.children.length > 40) feed.removeChild(feed.lastChild);
+}
+
+// ── ATTACK BARS ──
+function updateAttackBars(counts) {
+    const container = document.getElementById('attack-bars');
+    const entries = Object.entries(counts).filter(([k]) => k !== 'Normal').sort((a, b) => b[1] - a[1]).slice(0, 10);
+    const max = entries.length > 0 ? entries[0][1] : 1;
+    const total = entries.reduce((s, [, v]) => s + v, 0);
+    document.getElementById('attack-total').textContent = `${fmt(total)} attacks`;
+
+    container.innerHTML = entries.map(([name, count]) => {
+        const pct = (count / max) * 100;
+        return `<div class="attack-row">
+            <div class="attack-name">${name}</div>
+            <div class="attack-bar-bg">
+                <div class="attack-bar-fill" style="width:${pct}%;background:${getColor(name)}"></div>
+            </div>
+            <div class="attack-count">${fmt(count)}</div>
+        </div>`;
+    }).join('');
+}
+
+// ── CLOCK ──
+function updateClock() {
+    document.getElementById('clock').textContent = new Date().toLocaleString('tr-TR');
+}
+
+// ── LAYER MODAL ──
+const LAYER_META = {
+    bronze: { icon: '🥉', title: 'Bronze Layer — Ham Veri', desc: 'Kafka\'dan gelen JSON logları hiçbir değişikliğe uğratılmadan Delta Lake\'e yazılır.' },
+    silver: { icon: '🥈', title: 'Silver Layer — Temizlenmiş Veri', desc: 'JSON parse edilir, NULL/Inf temizlenir, duplikatlar kaldırılır, veri tipleri düzeltilir.' },
+    gold:   { icon: '🥇', title: 'Gold Layer — ML-Ready', desc: '5 feature üretilir: traffic_asymmetry_ratio, pkt_size_cv, flow_intensity, iat_regularity, conn_efficiency.' }
+};
+
+async function openLayerModal(layer) {
+    const modal = document.getElementById('layer-modal');
+    const meta = LAYER_META[layer];
+    document.getElementById('modal-title').innerHTML = `${meta.icon} ${meta.title}`;
+    document.getElementById('modal-info').textContent = meta.desc;
+    document.getElementById('modal-body').innerHTML = '<div class="modal-empty">⏳ Veriler yükleniyor...</div>';
+    modal.classList.add('active');
+
+    try {
+        const res = await fetch(`http://localhost:5001/api/layer/${layer}`, { signal: AbortSignal.timeout(5000) });
+        const data = await res.json();
+
+        if (data.status === 'empty' || data.rows.length === 0) {
+            document.getElementById('modal-body').innerHTML = `<div class="modal-empty">📭 ${data.message || 'Bu katmanda henüz veri yok. Streaming pipeline çalıştırıldığında veriler burada görünecek.'}</div>`;
+            document.getElementById('modal-info').textContent = `${meta.desc} — Toplam: 0 satır`;
+            return;
+        }
+
+        document.getElementById('modal-info').textContent = `${meta.desc} — Toplam: ${data.total_rows.toLocaleString()} satır (son 20 gösteriliyor)`;
+
+        // Build table
+        let html = '<table class="data-table"><thead><tr>';
+        data.columns.forEach(col => { html += `<th>${col}</th>`; });
+        html += '</tr></thead><tbody>';
+        data.rows.forEach(row => {
+            html += '<tr>';
+            data.columns.forEach(col => {
+                let rawVal = row[col];
+                let val = rawVal;
+                if (val === null || val === 'null') {
+                    val = '<span style="color:#475569">null</span>';
+                } else if (typeof val === 'number') {
+                    val = Number.isInteger(val) ? val : val.toFixed(4);
+                } else if (typeof val === 'string') {
+                    // Temizle ve kısalt (HTML karakterlerini kaçış karakteriyle değiştirmiyoruz, ama \n'leri siliyoruz)
+                    val = val.replace(/\n/g, ' ').replace(/\r/g, '');
+                    if (val.length > 60) val = val.substring(0, 57) + '...';
+                }
+                
+                // Güvenli escape for title attribute
+                let safeTitle = String(rawVal).replace(/"/g, '&quot;').replace(/\n/g, ' ');
+                html += `<td title="${safeTitle}">${val}</td>`;
+            });
+            html += '</tr>';
+        });
+        html += '</tbody></table>';
+        document.getElementById('modal-body').innerHTML = html;
+
+    } catch (e) {
+        document.getElementById('modal-body').innerHTML = `<div class="modal-empty">❌ API bağlantı hatası: ${e.message}</div>`;
+    }
+}
+
+function closeModal() {
+    document.getElementById('layer-modal').classList.remove('active');
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+// ── START ──
+updateClock();
+setInterval(fetchStats, 1000);
+setInterval(updateClock, 1000);
+fetchStats();
+</script>
+</body>
+</html>
