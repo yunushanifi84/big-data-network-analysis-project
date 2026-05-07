@@ -97,30 +97,6 @@ Pipeline başarıyla başladığında konsolda şu mesajları görmelisiniz:
 
 Durdurmak için `Ctrl+C` kullanın.
 
-### 4. Pipeline Doğrulama
-
-Pipeline çalıştıktan sonra Delta tablolarını JupyterLab (`http://localhost:8888`) üzerinden sorgulayarak veri akışını doğrulayabilirsiniz:
-
-```python
-from pyspark.sql import SparkSession
-
-spark = SparkSession.builder \
-    .appName("Verification") \
-    .config("spark.jars.packages", "io.delta:delta-core_2.12:2.4.0") \
-    .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
-    .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
-    .getOrCreate()
-
-# Katman bazında kayıt sayıları (Bronze ≥ Silver ≥ Gold olmalı)
-for layer, path in [
-    ("Bronze", "/opt/bitnami/spark/delta-storage/bronze/network_traffic"),
-    ("Silver", "/opt/bitnami/spark/delta-storage/silver/network_traffic"),
-    ("Gold",   "/opt/bitnami/spark/delta-storage/gold/ml_ready")
-]:
-    df = spark.read.format("delta").load(path)
-    print(f"{layer}: {df.count():,} kayıt")
-```
-
 ---
 
 ## 📊 Servis Adresleri
