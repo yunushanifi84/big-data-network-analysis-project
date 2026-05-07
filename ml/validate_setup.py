@@ -10,8 +10,8 @@ feature hazırlığını yapar ve train/test split doğrulaması gerçekleştiri
         /opt/bitnami/spark/ml/validate_setup.py
 """
 
-import os
 import sys
+import argparse
 
 # Proje dizinini Python path'e ekle
 sys.path.insert(0, "/opt/bitnami/spark")
@@ -28,7 +28,24 @@ from ml.utils import (
 )
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Adım 6.1 doğrulama scripti")
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Hızlı doğrulama modu (örneklem veri ile çalışır)",
+    )
+    parser.add_argument(
+        "--sample-size",
+        type=int,
+        default=10000,
+        help="Hızlı modda kullanılacak maksimum satır sayısı",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
     print("=" * 60)
     print("  Adım 6.1 — MLflow Altyapısı Doğrulama")
     print("=" * 60)
@@ -58,6 +75,11 @@ def main():
     print("\n[3/6] Gold katmanından veri yükleniyor...")
     try:
         df = load_gold_data(spark)
+        if args.fast:
+            print(f"\n   ⚡ Hızlı mod aktif: veri {args.sample_size:,} satır ile sınırlandırılıyor.")
+            df = df.limit(args.sample_size)
+            df = df.cache()
+            _ = df.count()  # cache materialize
         print("\n   İlk 5 satır:")
         df.show(5, truncate=True)
         print(f"\n   Şema:")
@@ -96,9 +118,10 @@ def main():
     # 6. Train/Test split
     print("\n[6/6] Train/Test split yapılıyor...")
     try:
-        train_df, test_df = split_data(prepared_df)
-        print(f"\n   Train features örneği:")
-        train_df.select("features", "label", "classWeight").show(3, truncate=True)
+        train_df, test_df = split_data(prepared_df, log_stats=not args.fast)
+        if not args.fast:
+            print(f"\n   Train features örneği:")
+            train_df.select("features", "label", "classWeight").show(3, truncate=True)
     except Exception as e:
         print(f"   ❌ Split hatası: {e}")
 

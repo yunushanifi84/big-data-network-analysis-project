@@ -3,6 +3,7 @@ data/
 delta-storage/
 mlflow-artifacts/
 mlruns/
+.commandcode/
 
 # Python ve Ortam
 __pycache__/

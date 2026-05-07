@@ -65,10 +65,14 @@ docker exec -it kafka kafka-topics.sh --list --bootstrap-server localhost:9092
 Producer, CSV dosyasındaki ağ trafiği verilerini Kafka'ya gerçek zamanlı simülasyon olarak gönderir. `--rate` parametresi ile saniyedeki mesaj sayısını ayarlayabilirsiniz:
 
 ```bash
-docker compose up kafka-producer
+docker compose up --build kafka-producer
 ```
 
-> **Not:** Producer varsayılan olarak saniyede 50 mesaj gönderir. Hızı değiştirmek isterseniz `docker-compose.yml` içindeki producer servisine `command: python kafka/producer.py --rate 100` gibi bir parametre ekleyebilirsiniz.
+> **Not:** Producer parametreleri `docker-compose.yml` içindeki `kafka-producer.command` alanından yönetilir.
+> Örnekler:
+> - Gecikmesiz tam hız: `--no-delay`
+> - Mesaj limiti: `--max-messages 5000` (0 = sınırsız)
+> - Hız limiti: `--rate 100` (no-delay kapalıysa geçerli)
 
 ### 3. Spark Streaming Pipeline (Bronze → Silver → Gold)
 
@@ -93,30 +97,6 @@ Pipeline başarıyla başladığında konsolda şu mesajları görmelisiniz:
 
 Durdurmak için `Ctrl+C` kullanın.
 
-### 4. Pipeline Doğrulama
-
-Pipeline çalıştıktan sonra Delta tablolarını JupyterLab (`http://localhost:8888`) üzerinden sorgulayarak veri akışını doğrulayabilirsiniz:
-
-```python
-from pyspark.sql import SparkSession
-
-spark = SparkSession.builder \
-    .appName("Verification") \
-    .config("spark.jars.packages", "io.delta:delta-core_2.12:2.4.0") \
-    .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
-    .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
-    .getOrCreate()
-
-# Katman bazında kayıt sayıları (Bronze ≥ Silver ≥ Gold olmalı)
-for layer, path in [
-    ("Bronze", "/opt/bitnami/spark/delta-storage/bronze/network_traffic"),
-    ("Silver", "/opt/bitnami/spark/delta-storage/silver/network_traffic"),
-    ("Gold",   "/opt/bitnami/spark/delta-storage/gold/ml_ready")
-]:
-    df = spark.read.format("delta").load(path)
-    print(f"{layer}: {df.count():,} kayıt")
-```
-
 ---
 
 ## 📊 Servis Adresleri
@@ -127,6 +107,44 @@ for layer, path in [
 | Spark Master UI | `http://localhost:8080` |
 | MLflow UI | `http://localhost:5000` |
 | Kafka (dış erişim) | `localhost:29092` |
+
+---
+
+## 🤖 Model Eğitimleri
+
+### 1. Kurulum Doğrulama
+
+```bash
+docker exec spark-master spark-submit --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/validate_setup.py
+```
+
+> Hızlı doğrulama için: `--fast --sample-size 1000` (ör. `--sample-size 5000`).
+
+### 2. Logistic Regression (Binary: Saldırı Var/Yok)
+
+```bash
+docker exec spark-master spark-submit --driver-memory 2g --executor-memory 2g --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/01_logistic_regression.py
+```
+
+> Hızlı eğitim için: `--fast --sample-size 30000`  
+> Daha kapsamlı cross-validation için: `--cv-mode full`  
+> Eğitim sonuçları ve metrikler MLflow UI'da görünür: `http://localhost:5000`
+
+---
+
+### 3. Multinomial Logistic Regression (Saldırı Tipi)
+
+`01_logistic_regression.py` saldırı **var/yok** (binary) ayrımı yaparken,
+`01b_logistic_regression_multiclass.py` saldırının **türünü** tahmin eder
+(`Attack_type` kolonu: ör. `Normal`, `DDoS_HTTP`, `Port_Scanning`, `MITM` vb.).
+
+```bash
+docker exec spark-master spark-submit --driver-memory 2g --executor-memory 2g --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/01b_logistic_regression_multiclass.py
+```
+
+> Hızlı eğitim için: `--fast --sample-size 30000`  
+> Daha kapsamlı cross-validation için: `--cv-mode full`  
+> Multi-class çıktısı: `accuracy`, `f1_score`, `weightedPrecision/Recall`, her sınıf için ayrı `precision/recall/f1` ve NxN confusion matrix MLflow'a `confusion_matrix.csv` artifact'ı olarak yazılır.
 
 ---
 
