@@ -15,12 +15,14 @@ Kullanım:
 
 import os
 import sys
+import time
 import mlflow
 import mlflow.spark
 import numpy as np
 
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
+from pyspark import StorageLevel
 from pyspark.ml.feature import VectorAssembler, StringIndexer
 from pyspark.ml.evaluation import (
     BinaryClassificationEvaluator,
@@ -53,6 +55,7 @@ def init_mlflow(
 def load_gold_data(
     spark: SparkSession,
     gold_path: str = "/opt/bitnami/spark/delta-storage/gold/ml_ready",
+    log_stats: bool = False,
 ) -> DataFrame:
     """
     Gold katmanından ML'e hazır Delta verisini batch olarak okur.
@@ -68,9 +71,11 @@ def load_gold_data(
     print(f"📥 Gold katmanından veri okunuyor: {gold_path}")
     df = spark.read.format("delta").load(gold_path)
 
-    row_count = df.count()
     col_count = len(df.columns)
-    print(f"   ✅ {row_count:,} satır, {col_count} kolon yüklendi.")
+    print(f"   ✅ Okuma tamamlandı. Kolon sayısı: {col_count}")
+    if log_stats:
+        row_count = df.count()
+        print(f"   📊 Satır sayısı: {row_count:,}")
 
     return df
 
@@ -116,6 +121,7 @@ def prepare_features(
     df: DataFrame,
     label_col: str = "Attack_label",
     feature_cols: list = None,
+    log_stats: bool = False,
 ) -> DataFrame:
     """
     VectorAssembler ile feature vektörü, StringIndexer ile label encoding yapar.
@@ -161,8 +167,10 @@ def prepare_features(
     # Label null olanları filtrele
     assembled_df = assembled_df.filter(F.col("label").isNotNull())
 
-    final_count = assembled_df.count()
-    print(f"   ✅ Feature hazırlığı tamamlandı. {final_count:,} satır kullanıma hazır.")
+    print("   ✅ Feature hazırlığı tamamlandı.")
+    if log_stats:
+        final_count = assembled_df.count()
+        print(f"   📊 Feature sonrası satır sayısı: {final_count:,}")
 
     return assembled_df
 
@@ -247,8 +255,8 @@ def compute_class_weights(df: DataFrame, label_col: str = "label") -> dict:
     Returns:
         dict: {label_value: weight} sözlüğü
     """
-    total = df.count()
     label_counts = df.groupBy(label_col).count().collect()
+    total = sum(row["count"] for row in label_counts)
     n_classes = len(label_counts)
 
     weights = {}
@@ -503,34 +511,66 @@ def run_ml_pipeline(
     Returns:
         (train_df, test_df, feature_cols): Hazır eğitim ve test setleri + feature listesi
     """
+    pipeline_start = time.perf_counter()
+    print("\n🧱 Ortak ML pipeline başlatıldı...")
+
     # 1. MLflow bağlantısı
+    stage_start = time.perf_counter()
     init_mlflow()
+    print(f"   ⏱️ MLflow hazırlık süresi: {time.perf_counter() - stage_start:.2f}s")
 
     # 2. Gold katmanından veri yükle
-    df = load_gold_data(spark)
+    stage_start = time.perf_counter()
+    df = load_gold_data(spark, log_stats=split_log_stats)
+    print(f"   ⏱️ Gold veri okuma süresi: {time.perf_counter() - stage_start:.2f}s")
 
     if sample_size is not None:
         print(f"⚡ Örneklem modu aktif: veri {sample_size:,} satır ile sınırlandırılıyor.")
-        df = df.limit(sample_size).cache()
+        df = df.limit(sample_size).persist(StorageLevel.MEMORY_AND_DISK)
         _ = df.count()
+        print("   ✅ Örneklem materialize edildi (MEMORY_AND_DISK).")
 
     # 3. Feature kolonlarını belirle
+    stage_start = time.perf_counter()
     feature_cols = get_feature_columns(df)
+    print(f"   ⏱️ Feature kolon seçimi: {time.perf_counter() - stage_start:.2f}s")
 
     # 4. Feature vektörü ve label oluştur
-    prepared_df = prepare_features(df, feature_cols=feature_cols)
+    stage_start = time.perf_counter()
+    prepared_df = prepare_features(
+        df,
+        feature_cols=feature_cols,
+        log_stats=False,
+    )
+    print(f"   ⏱️ Feature hazırlama süresi: {time.perf_counter() - stage_start:.2f}s")
 
     # 5. Sınıf ağırlıklarını hesapla ve ekle
+    stage_start = time.perf_counter()
     weights = compute_class_weights(prepared_df)
     prepared_df = add_weight_column(prepared_df, weights)
+    prepared_df = prepared_df.persist(StorageLevel.MEMORY_AND_DISK)
+    prepared_count = prepared_df.count()
+    print(f"   ✅ Weighted veri hazır: {prepared_count:,} satır (MEMORY_AND_DISK).")
+    print(f"   ⏱️ Weight hesaplama + persist: {time.perf_counter() - stage_start:.2f}s")
 
     # 6. Train/Test split
+    stage_start = time.perf_counter()
     train_df, test_df = split_data(prepared_df, log_stats=split_log_stats)
+    print(f"   ⏱️ Split süresi: {time.perf_counter() - stage_start:.2f}s")
 
     # Cache — ML eğitimi sırasında tekrar tekrar okunacak
-    train_df = train_df.cache()
-    test_df = test_df.cache()
+    train_df = train_df.persist(StorageLevel.MEMORY_AND_DISK)
+    test_df = test_df.persist(StorageLevel.MEMORY_AND_DISK)
+    train_count = train_df.count()
+    test_count = test_df.count()
+    print(f"   ✅ Train materialize: {train_count:,} satır")
+    print(f"   ✅ Test  materialize: {test_count:,} satır")
+
+    prepared_df.unpersist()
+    if sample_size is not None:
+        df.unpersist()
 
     print(f"\n🚀 ML Pipeline hazır! Model eğitimine geçilebilir.")
+    print(f"   ⏱️ Toplam ortak pipeline süresi: {time.perf_counter() - pipeline_start:.2f}s")
 
     return train_df, test_df, feature_cols
