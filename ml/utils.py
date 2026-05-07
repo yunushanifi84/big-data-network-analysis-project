@@ -142,32 +142,27 @@ def prepare_features(
 
     print(f"🔧 Feature vektörü oluşturuluyor ({len(feature_cols)} feature)...")
 
-    # 1. Null/NaN değerleri temizle (VectorAssembler NaN kaldıramaz)
-    for col_name in feature_cols:
-        df = df.withColumn(
-            col_name,
-            F.when(F.col(col_name).isNull(), F.lit(0.0))
-            .when(F.isnan(F.col(col_name)), F.lit(0.0))
-            .otherwise(F.col(col_name).cast("double"))
-        )
+    select_exprs = [
+        F.coalesce(
+            F.when(F.isnan(F.col(c).cast("double")), F.lit(0.0))
+             .otherwise(F.col(c).cast("double")),
+            F.lit(0.0),
+        ).alias(c)
+        for c in feature_cols
+    ]
+    select_exprs.append(F.col(label_col).cast("double").alias("label"))
+    df = df.select(*select_exprs)
 
-    # 2. VectorAssembler — tüm feature'ları tek bir vektöre birleştir
     assembler = VectorAssembler(
         inputCols=feature_cols,
         outputCol="features",
-        handleInvalid="skip",  # Hatalı satırları atla
+        handleInvalid="skip",
     )
-    assembled_df = assembler.transform(df)
+    assembled_df = assembler.transform(df).select("features", "label")
 
-    # 3. Label kolonu — zaten 0/1 integer ise doğrudan cast et
-    assembled_df = assembled_df.withColumn(
-        "label", F.col(label_col).cast("double")
-    )
-
-    # Label null olanları filtrele
     assembled_df = assembled_df.filter(F.col("label").isNotNull())
 
-    print("   ✅ Feature hazırlığı tamamlandı.")
+    print("   ✅ Feature hazırlığı tamamlandı (tek select + assembler).")
     if log_stats:
         final_count = assembled_df.count()
         print(f"   📊 Feature sonrası satır sayısı: {final_count:,}")
@@ -199,29 +194,7 @@ def split_data(
         (train_df, test_df): Eğitim ve test DataFrame'leri
     """
     test_ratio = 1.0 - train_ratio
-
-    if stratified:
-        # Label bazlı stratified split:
-        # Her sınıf için ayrı split yapıp birleştiririz, böylece sınıf oranı korunur.
-        labels = [row["label"] for row in df.select("label").distinct().collect()]
-        train_parts = []
-        test_parts = []
-
-        for label_value in labels:
-            label_df = df.filter(F.col("label") == label_value)
-            label_train, label_test = label_df.randomSplit([train_ratio, test_ratio], seed=seed)
-            train_parts.append(label_train)
-            test_parts.append(label_test)
-
-        train_df = train_parts[0]
-        test_df = test_parts[0]
-        for part in train_parts[1:]:
-            train_df = train_df.unionByName(part)
-        for part in test_parts[1:]:
-            test_df = test_df.unionByName(part)
-    else:
-        # randomSplit — Spark-native bölme
-        train_df, test_df = df.randomSplit([train_ratio, test_ratio], seed=seed)
+    train_df, test_df = df.randomSplit([train_ratio, test_ratio], seed=seed)
 
     if log_stats:
         train_count = train_df.count()
@@ -512,77 +485,52 @@ def run_ml_pipeline(
         (train_df, test_df, feature_cols): Hazır eğitim ve test setleri + feature listesi
     """
     pipeline_start = time.perf_counter()
-    print("\n🧱 Ortak ML pipeline başlatıldı...")
+    print("\n🧱 Ortak ML pipeline başlatıldı...", flush=True)
 
-    # 1. MLflow bağlantısı
     stage_start = time.perf_counter()
     init_mlflow()
-    print(f"   ⏱️ MLflow hazırlık süresi: {time.perf_counter() - stage_start:.2f}s")
+    print(f"   ⏱️ MLflow: {time.perf_counter() - stage_start:.2f}s", flush=True)
 
-    # 2. Gold katmanından veri yükle
     stage_start = time.perf_counter()
-    df = load_gold_data(spark, log_stats=split_log_stats)
-    print(f"   ⏱️ Gold veri okuma süresi: {time.perf_counter() - stage_start:.2f}s")
+    df = load_gold_data(spark, log_stats=False)
+    print(f"   ⏱️ Gold okuma (lazy): {time.perf_counter() - stage_start:.2f}s", flush=True)
 
-    if sample_size is not None:
-        print(f"⚡ Örneklem modu aktif: veri {sample_size:,} satır ile sınırlandırılıyor.")
-        df = df.limit(sample_size).persist(StorageLevel.MEMORY_AND_DISK)
-        _ = df.count()
-        print("   ✅ Örneklem materialize edildi (MEMORY_AND_DISK).")
-
-    # 3. Feature kolonlarını belirle
-    stage_start = time.perf_counter()
     feature_cols = get_feature_columns(df)
-    print(f"   ⏱️ Feature kolon seçimi: {time.perf_counter() - stage_start:.2f}s")
 
-    # 4. Feature vektörü ve label oluştur
     stage_start = time.perf_counter()
-    prepared_df = prepare_features(
-        df,
-        feature_cols=feature_cols,
-        log_stats=False,
-    )
-    print(f"   ⏱️ Feature hazırlama süresi: {time.perf_counter() - stage_start:.2f}s")
+    print(f"   ⏳ [1] prepare_features (lazy)...", flush=True)
+    prepared_df = prepare_features(df, feature_cols=feature_cols, log_stats=False)
+    print(f"   ✅ [1] prepare_features tanımlandı: {time.perf_counter() - stage_start:.2f}s", flush=True)
 
-    # 5. Sınıf ağırlıklarını hesapla ve ekle
     stage_start = time.perf_counter()
+    print(f"   ⏳ [2] Tek seferlik MATERIALIZE (coalesce + persist + count)...", flush=True)
+    target_partitions = 4 if sample_size and sample_size <= 50000 else 8
+    if sample_size is not None:
+        total_count = df.count()
+        fraction = min(sample_size / total_count, 1.0)
+        print(f"   ⚡ Örneklem: {total_count:,} → ~{sample_size:,} satır (frac={fraction:.4f})", flush=True)
+        prepared_df = prepared_df.sample(withReplacement=False, fraction=fraction, seed=42)
+
+    prepared_df = prepared_df.coalesce(target_partitions).persist(StorageLevel.MEMORY_AND_DISK)
+    materialized_count = prepared_df.count()
+    print(f"   ✅ [2] Materialize tamam: {materialized_count:,} satır, {time.perf_counter() - stage_start:.2f}s", flush=True)
+
+    stage_start = time.perf_counter()
+    print(f"   ⏳ [3] Class weights (cached'ten)...", flush=True)
     weights = compute_class_weights(prepared_df)
     prepared_df = add_weight_column(prepared_df, weights)
-    prepared_df = prepared_df.persist(StorageLevel.MEMORY_AND_DISK)
-    print("   ⏳ Weighted veri materialize ediliyor...")
-    if split_log_stats:
-        prepared_count = prepared_df.count()
-        print(f"   ✅ Weighted veri hazır: {prepared_count:,} satır (MEMORY_AND_DISK).")
-    else:
-        # Fast modda bu count pahalı olabildiği için atlanır.
-        _ = prepared_df.take(1)
-        print("   ✅ Weighted veri hazır (hızlı doğrulama, count atlandı).")
-    print(f"   ⏱️ Weight hesaplama + persist: {time.perf_counter() - stage_start:.2f}s")
+    print(f"   ✅ [3] Weights: {time.perf_counter() - stage_start:.2f}s", flush=True)
 
-    # 6. Train/Test split
     stage_start = time.perf_counter()
-    train_df, test_df = split_data(prepared_df, log_stats=split_log_stats)
-    print(f"   ⏱️ Split süresi: {time.perf_counter() - stage_start:.2f}s")
-
-    # Cache — ML eğitimi sırasında tekrar tekrar okunacak
+    print(f"   ⏳ [4] randomSplit (cached'ten)...", flush=True)
+    train_df, test_df = split_data(prepared_df, log_stats=False)
     train_df = train_df.persist(StorageLevel.MEMORY_AND_DISK)
     test_df = test_df.persist(StorageLevel.MEMORY_AND_DISK)
-    print("   ⏳ Train/Test materialize ediliyor...")
-    if split_log_stats:
-        train_count = train_df.count()
-        test_count = test_df.count()
-        print(f"   ✅ Train materialize: {train_count:,} satır")
-        print(f"   ✅ Test  materialize: {test_count:,} satır")
-    else:
-        _ = train_df.take(1)
-        _ = test_df.take(1)
-        print("   ✅ Train/Test materialize tamam (hızlı doğrulama, count atlandı).")
+    train_count = train_df.count()
+    test_count = test_df.count()
+    print(f"   ✅ [4] Train: {train_count:,} | Test: {test_count:,} ({time.perf_counter() - stage_start:.2f}s)", flush=True)
 
     prepared_df.unpersist()
-    if sample_size is not None:
-        df.unpersist()
 
-    print(f"\n🚀 ML Pipeline hazır! Model eğitimine geçilebilir.")
-    print(f"   ⏱️ Toplam ortak pipeline süresi: {time.perf_counter() - pipeline_start:.2f}s")
-
+    print(f"\n🚀 ML Pipeline hazır! Toplam: {time.perf_counter() - pipeline_start:.2f}s", flush=True)
     return train_df, test_df, feature_cols
