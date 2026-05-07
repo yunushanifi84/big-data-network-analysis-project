@@ -110,6 +110,20 @@ services:
     networks:
       - bigdata-net
 
+  dashboard-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dashboard
+    container_name: dashboard-api
+    depends_on:
+      - kafka
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./delta-storage:/app/delta-storage
+    networks:
+      - bigdata-net
+
 networks:
   bigdata-net:
     driver: bridge
