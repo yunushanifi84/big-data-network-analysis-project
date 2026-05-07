@@ -13,6 +13,10 @@ Kullanım:
     from spark.preprocessing.feature_engineering import FeatureEngineer
     engineer = FeatureEngineer(spark, clean_df)
     featured_df = engineer.create_all_features()
+
+NOT: Silver katmanı kolon isimlerindeki noktaları alt çizgiyle değiştirir.
+     Örn: tcp.ack → tcp_ack, dns.qry.type → dns_qry_type
+     Bu dosyadaki tüm kolon referansları bu dönüşüme uygun yazılmıştır.
 """
 
 from pyspark.sql import SparkSession, DataFrame
@@ -42,7 +46,7 @@ class FeatureEngineer:
     # ──────────────────────────────────────────────
     def add_traffic_asymmetry_ratio(self) -> "FeatureEngineer":
         """
-        traffic_asymmetry_ratio = tcp.ack / (tcp.seq + 1)
+        traffic_asymmetry_ratio = tcp_ack / (tcp_seq + 1)
 
         NEDEN?
         Normal ağ trafiği genelde simetrik bir istek-cevap (ACK/SEQ) akışına
@@ -52,20 +56,20 @@ class FeatureEngineer:
 
         TESPIT ETTİĞİ SALDIRILAR: DDoS TCP/UDP/ICMP Flood, SYN Flood
         """
-        ack_col = "tcp.ack" if "tcp.ack" in self.df.columns else None
-        seq_col = "tcp.seq" if "tcp.seq" in self.df.columns else None
+        ack_col = "tcp_ack" if "tcp_ack" in self.df.columns else None
+        seq_col = "tcp_seq" if "tcp_seq" in self.df.columns else None
 
         if ack_col and seq_col:
             self.df = self.df.withColumn(
                 "traffic_asymmetry_ratio",
-                F.col(f"`{ack_col}`") / (F.col(f"`{seq_col}`") + F.lit(1))
+                F.col(ack_col) / (F.col(seq_col) + F.lit(1))
             )
         else:
-            # Fallback: tcp.ack_raw kullan
-            ack_col = "tcp.ack_raw" if "tcp.ack_raw" in self.df.columns else "tcp.ack"
+            # Fallback: tcp_ack_raw kullan
+            ack_col = "tcp_ack_raw" if "tcp_ack_raw" in self.df.columns else "tcp_ack"
             self.df = self.df.withColumn(
                 "traffic_asymmetry_ratio",
-                F.col(f"`{ack_col}`") / (F.col("`tcp.checksum`") + F.lit(1))
+                F.col(ack_col) / (F.col("tcp_checksum") + F.lit(1))
             )
 
         # NaN/Inf temizle
@@ -88,10 +92,7 @@ class FeatureEngineer:
     # ──────────────────────────────────────────────
     def add_pkt_size_cv(self) -> "FeatureEngineer":
         """
-        pkt_size_cv = tcp.len_std_approx / (tcp.len + 1)
-
-        Burada tcp.len'in pencere içindeki standart sapmasına yakın bir
-        değeri, tcp.payload ve tcp.len kullanarak türetiyoruz.
+        pkt_size_cv = |tcp_len - tcp_payload| / (tcp_len + 1)
 
         NEDEN?
         Normal trafik tutarlı paket boyutlarına sahiptir (düşük varyasyon).
@@ -101,16 +102,16 @@ class FeatureEngineer:
 
         TESPIT ETTİĞİ SALDIRILAR: Port Scanning, Vulnerability Scanner, OS Fingerprinting
         """
-        # tcp.len ve tcp.payload arasındaki fark paket header overhead'ini gösterir
-        if "tcp.len" in self.df.columns and "tcp.payload" in self.df.columns:
+        # tcp_len ve tcp_payload arasındaki fark paket header overhead'ini gösterir
+        if "tcp_len" in self.df.columns and "tcp_payload" in self.df.columns:
             self.df = self.df.withColumn(
                 "pkt_size_cv",
-                F.abs(F.col("`tcp.len`") - F.col("`tcp.payload`")) / (F.col("`tcp.len`") + F.lit(1))
+                F.abs(F.col("tcp_len") - F.col("tcp_payload")) / (F.col("tcp_len") + F.lit(1))
             )
-        elif "tcp.len" in self.df.columns:
+        elif "tcp_len" in self.df.columns:
             self.df = self.df.withColumn(
                 "pkt_size_cv",
-                F.col("`tcp.len`") / (F.col("`tcp.checksum`") + F.lit(1))
+                F.col("tcp_len") / (F.col("tcp_checksum") + F.lit(1))
             )
         else:
             self.df = self.df.withColumn("pkt_size_cv", F.lit(0.0))
@@ -135,23 +136,23 @@ class FeatureEngineer:
     # ──────────────────────────────────────────────
     def add_flow_intensity(self) -> "FeatureEngineer":
         """
-        flow_intensity = tcp.len * tcp.flags
+        flow_intensity = tcp_len * tcp_flags
 
         NEDEN?
-        Paket boyutunu (tcp.len) ve bayrak sayısını (tcp.flags) tek bir
+        Paket boyutunu (tcp_len) ve bayrak sayısını (tcp_flags) tek bir
         metrikte birleştirir. DDoS UDP/ICMP Flood saldırılarında hem paket
         boyutu hem de flag sayısı anormal değerler alır. Bu metrik bu
         iki boyutu çarparak volumetrik saldırıları tespit eder.
 
         TESPIT ETTİĞİ SALDIRILAR: DDoS UDP/ICMP Flood, HTTP Flood
         """
-        len_col = "tcp.len" if "tcp.len" in self.df.columns else None
-        flags_col = "tcp.flags" if "tcp.flags" in self.df.columns else None
+        len_col = "tcp_len" if "tcp_len" in self.df.columns else None
+        flags_col = "tcp_flags" if "tcp_flags" in self.df.columns else None
 
         if len_col and flags_col:
             self.df = self.df.withColumn(
                 "flow_intensity",
-                F.col(f"`{len_col}`") * F.col(f"`{flags_col}`")
+                F.col(len_col) * F.col(flags_col)
             )
         else:
             # Fallback
@@ -177,7 +178,7 @@ class FeatureEngineer:
     # ──────────────────────────────────────────────
     def add_iat_regularity(self) -> "FeatureEngineer":
         """
-        iat_regularity = udp.time_delta / (frame.time + 1)
+        iat_regularity = udp_time_delta / (frame_time + 1)
 
         NEDEN?
         Otomatize edilmiş saldırı araçları (botnet, scanner) paketleri çok
@@ -187,13 +188,13 @@ class FeatureEngineer:
 
         TESPIT ETTİĞİ SALDIRILAR: Botnet, Automated Scanning, Password Brute Force
         """
-        delta_col = "udp.time_delta" if "udp.time_delta" in self.df.columns else None
-        time_col = "frame.time" if "frame.time" in self.df.columns else None
+        delta_col = "udp_time_delta" if "udp_time_delta" in self.df.columns else None
+        time_col = "frame_time" if "frame_time" in self.df.columns else None
 
         if delta_col and time_col:
             self.df = self.df.withColumn(
                 "iat_regularity",
-                F.col(f"`{delta_col}`") / (F.col(f"`{time_col}`") + F.lit(1))
+                F.col(delta_col) / (F.col(time_col) + F.lit(1))
             )
         else:
             self.df = self.df.withColumn("iat_regularity", F.lit(0.0))
@@ -218,7 +219,7 @@ class FeatureEngineer:
     # ──────────────────────────────────────────────
     def add_conn_efficiency(self) -> "FeatureEngineer":
         """
-        conn_efficiency = tcp.connection.syn / (tcp.connection.fin + tcp.connection.rst + 1)
+        conn_efficiency = tcp_connection_syn / (tcp_connection_fin + tcp_connection_rst + 1)
 
         NEDEN?
         Normal bir TCP bağlantısında SYN → veri transferi → FIN/RST akışı
@@ -229,19 +230,19 @@ class FeatureEngineer:
 
         TESPIT ETTİĞİ SALDIRILAR: Port Scanning, OS Fingerprinting, SYN Flood
         """
-        syn_col = "tcp.connection.syn" if "tcp.connection.syn" in self.df.columns else None
-        fin_col = "tcp.connection.fin" if "tcp.connection.fin" in self.df.columns else None
-        rst_col = "tcp.connection.rst" if "tcp.connection.rst" in self.df.columns else None
+        syn_col = "tcp_connection_syn" if "tcp_connection_syn" in self.df.columns else None
+        fin_col = "tcp_connection_fin" if "tcp_connection_fin" in self.df.columns else None
+        rst_col = "tcp_connection_rst" if "tcp_connection_rst" in self.df.columns else None
 
         if syn_col and fin_col and rst_col:
             self.df = self.df.withColumn(
                 "conn_efficiency",
-                F.col(f"`{syn_col}`") / (F.col(f"`{fin_col}`") + F.col(f"`{rst_col}`") + F.lit(1))
+                F.col(syn_col) / (F.col(fin_col) + F.col(rst_col) + F.lit(1))
             )
         elif syn_col and fin_col:
             self.df = self.df.withColumn(
                 "conn_efficiency",
-                F.col(f"`{syn_col}`") / (F.col(f"`{fin_col}`") + F.lit(1))
+                F.col(syn_col) / (F.col(fin_col) + F.lit(1))
             )
         else:
             self.df = self.df.withColumn("conn_efficiency", F.lit(0.0))

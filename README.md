@@ -51,11 +51,7 @@ Tüm Docker servisleri ayakta olduktan sonra (`docker compose up -d`), aşağıd
 ### 1. Kafka Topic Oluşturma
 
 ```bash
-docker exec -it kafka kafka-topics.sh --create \
-  --topic iot-network-traffic \
-  --partitions 3 \
-  --replication-factor 1 \
-  --bootstrap-server localhost:9092
+docker exec -it kafka kafka-topics.sh --create --topic iot-network-traffic --partitions 3 --replication-factor 1 --bootstrap-server localhost:9092
 ```
 
 Topic'in başarıyla oluştuğunu doğrulamak için:
@@ -79,16 +75,12 @@ docker compose up kafka-producer
 Ayrı bir terminal açarak Spark Structured Streaming pipeline'ını başlatın. Bu komut Bronze, Silver ve Gold katmanlarını sırasıyla başlatır:
 
 ```bash
-docker exec -it spark-master spark-submit \
-  --packages io.delta:delta-core_2.12:2.4.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2 \
-  /opt/bitnami/spark/spark/run_streaming_pipeline.py
+docker exec -it spark-master spark-submit --packages io.delta:delta-core_2.12:2.4.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2 /opt/bitnami/spark/spark/run_streaming_pipeline.py
 ```
 
 > Sadece Bronze katmanını test etmek isterseniz:
 > ```bash
-> docker exec -it spark-master spark-submit \
->   --packages io.delta:delta-core_2.12:2.4.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2 \
->   /opt/bitnami/spark/spark/run_bronze.py
+> docker exec -it spark-master spark-submit --packages io.delta:delta-core_2.12:2.4.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2 /opt/bitnami/spark/spark/run_bronze.py
 > ```
 
 Pipeline başarıyla başladığında konsolda şu mesajları görmelisiniz:
