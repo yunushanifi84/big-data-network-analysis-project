@@ -176,9 +176,11 @@ def split_data(
     train_ratio: float = 0.8,
     seed: int = 42,
     log_stats: bool = True,
+    stratified: bool = True,
 ) -> tuple:
     """
-    Train/test bölme — randomSplit kullanarak hızlı ve güvenilir.
+    Train/test bölme.
+    Varsayılan olarak label bazlı stratified split uygular.
 
     Args:
         df: Feature ve label kolonları içeren DataFrame
@@ -190,15 +192,36 @@ def split_data(
     """
     test_ratio = 1.0 - train_ratio
 
-    # randomSplit — hızlı ve Spark-native bölme
-    train_df, test_df = df.randomSplit([train_ratio, test_ratio], seed=seed)
+    if stratified:
+        # Label bazlı stratified split:
+        # Her sınıf için ayrı split yapıp birleştiririz, böylece sınıf oranı korunur.
+        labels = [row["label"] for row in df.select("label").distinct().collect()]
+        train_parts = []
+        test_parts = []
+
+        for label_value in labels:
+            label_df = df.filter(F.col("label") == label_value)
+            label_train, label_test = label_df.randomSplit([train_ratio, test_ratio], seed=seed)
+            train_parts.append(label_train)
+            test_parts.append(label_test)
+
+        train_df = train_parts[0]
+        test_df = test_parts[0]
+        for part in train_parts[1:]:
+            train_df = train_df.unionByName(part)
+        for part in test_parts[1:]:
+            test_df = test_df.unionByName(part)
+    else:
+        # randomSplit — Spark-native bölme
+        train_df, test_df = df.randomSplit([train_ratio, test_ratio], seed=seed)
 
     if log_stats:
         train_count = train_df.count()
         test_count = test_df.count()
         total = train_count + test_count
 
-        print(f"📊 Train/Test split yapıldı (seed={seed}):")
+        split_mode = "stratified" if stratified else "random"
+        print(f"📊 Train/Test split yapıldı (mode={split_mode}, seed={seed}):")
         print(f"   Train: {train_count:,} ({train_count/total*100:.1f}%)")
         print(f"   Test:  {test_count:,} ({test_count/total*100:.1f}%)")
 
