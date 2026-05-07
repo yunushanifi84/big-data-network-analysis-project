@@ -549,8 +549,14 @@ def run_ml_pipeline(
     weights = compute_class_weights(prepared_df)
     prepared_df = add_weight_column(prepared_df, weights)
     prepared_df = prepared_df.persist(StorageLevel.MEMORY_AND_DISK)
-    prepared_count = prepared_df.count()
-    print(f"   ✅ Weighted veri hazır: {prepared_count:,} satır (MEMORY_AND_DISK).")
+    print("   ⏳ Weighted veri materialize ediliyor...")
+    if split_log_stats:
+        prepared_count = prepared_df.count()
+        print(f"   ✅ Weighted veri hazır: {prepared_count:,} satır (MEMORY_AND_DISK).")
+    else:
+        # Fast modda bu count pahalı olabildiği için atlanır.
+        _ = prepared_df.take(1)
+        print("   ✅ Weighted veri hazır (hızlı doğrulama, count atlandı).")
     print(f"   ⏱️ Weight hesaplama + persist: {time.perf_counter() - stage_start:.2f}s")
 
     # 6. Train/Test split
@@ -561,10 +567,16 @@ def run_ml_pipeline(
     # Cache — ML eğitimi sırasında tekrar tekrar okunacak
     train_df = train_df.persist(StorageLevel.MEMORY_AND_DISK)
     test_df = test_df.persist(StorageLevel.MEMORY_AND_DISK)
-    train_count = train_df.count()
-    test_count = test_df.count()
-    print(f"   ✅ Train materialize: {train_count:,} satır")
-    print(f"   ✅ Test  materialize: {test_count:,} satır")
+    print("   ⏳ Train/Test materialize ediliyor...")
+    if split_log_stats:
+        train_count = train_df.count()
+        test_count = test_df.count()
+        print(f"   ✅ Train materialize: {train_count:,} satır")
+        print(f"   ✅ Test  materialize: {test_count:,} satır")
+    else:
+        _ = train_df.take(1)
+        _ = test_df.take(1)
+        print("   ✅ Train/Test materialize tamam (hızlı doğrulama, count atlandı).")
 
     prepared_df.unpersist()
     if sample_size is not None:
