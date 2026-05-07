@@ -175,6 +175,7 @@ def split_data(
     df: DataFrame,
     train_ratio: float = 0.8,
     seed: int = 42,
+    log_stats: bool = True,
 ) -> tuple:
     """
     Train/test bölme — randomSplit kullanarak hızlı ve güvenilir.
@@ -192,20 +193,21 @@ def split_data(
     # randomSplit — hızlı ve Spark-native bölme
     train_df, test_df = df.randomSplit([train_ratio, test_ratio], seed=seed)
 
-    train_count = train_df.count()
-    test_count = test_df.count()
-    total = train_count + test_count
+    if log_stats:
+        train_count = train_df.count()
+        test_count = test_df.count()
+        total = train_count + test_count
 
-    print(f"📊 Train/Test split yapıldı (seed={seed}):")
-    print(f"   Train: {train_count:,} ({train_count/total*100:.1f}%)")
-    print(f"   Test:  {test_count:,} ({test_count/total*100:.1f}%)")
+        print(f"📊 Train/Test split yapıldı (seed={seed}):")
+        print(f"   Train: {train_count:,} ({train_count/total*100:.1f}%)")
+        print(f"   Test:  {test_count:,} ({test_count/total*100:.1f}%)")
 
-    # Sınıf dağılımını göster
-    print("\n   Sınıf dağılımı:")
-    for row in df.groupBy("label").count().orderBy("label").collect():
-        label_val = row["label"]
-        label_name = "Normal" if label_val == 0.0 else "Attack"
-        print(f"   {label_name} (label={int(label_val)}): {row['count']:,}")
+        # Sınıf dağılımını göster
+        print("\n   Sınıf dağılımı:")
+        for row in df.groupBy("label").count().orderBy("label").collect():
+            label_val = row["label"]
+            label_name = "Normal" if label_val == 0.0 else "Attack"
+            print(f"   {label_name} (label={int(label_val)}): {row['count']:,}")
 
     return train_df, test_df
 

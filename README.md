@@ -130,6 +130,18 @@ for layer, path in [
 
 ---
 
+## ✅ Adım 6.1 Doğrulama (Hızlı Mod)
+
+Tam veri ile doğrulama uzun sürebileceği için hızlı kontrol modunu kullanabilirsiniz:
+
+```bash
+docker exec spark-master spark-submit --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/validate_setup.py --fast --sample-size 1000
+```
+
+> `--sample-size` değerini ihtiyaca göre artırabilirsiniz (ör. `5000` veya `10000`).
+
+---
+
 ## 🛠️ Sorun Giderme
 
 - **Kafka bağlantı hatası:** Kafka container'ının tamamen başladığından emin olun (`docker logs kafka`). Başlatma 10-15 saniye sürebilir.
