@@ -112,7 +112,7 @@ Durdurmak için `Ctrl+C` kullanın.
 
 ## 🤖 Model Eğitimleri
 
-### 1. Kurulum Doğrulama
+### 0. Kurulum Doğrulama
 
 ```bash
 docker exec spark-master spark-submit --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/validate_setup.py
@@ -120,7 +120,7 @@ docker exec spark-master spark-submit --packages io.delta:delta-core_2.12:2.4.0 
 
 > Hızlı doğrulama için: `--fast --sample-size 1000` (ör. `--sample-size 5000`).
 
-### 2. Logistic Regression (Binary: Saldırı Var/Yok)
+### 1. Logistic Regression (Binary: Saldırı Var/Yok)
 
 ```bash
 docker exec spark-master spark-submit --driver-memory 2g --executor-memory 2g --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/01_logistic_regression.py
