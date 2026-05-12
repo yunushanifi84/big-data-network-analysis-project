@@ -15,7 +15,10 @@
       "Bash(pkill -f \"streamlit run\")",
       "Bash(pkill -f \"streamlit\")",
       "Bash(pkill -f \"uvicorn\")",
-      "PowerShell(Get-NetTCPConnection *)"
+      "PowerShell(Get-NetTCPConnection *)",
+      "Read(//mnt/c/Users/oyunu/Desktop/**)",
+      "Bash(docker compose *)",
+      "PowerShell(docker compose ps *)"
     ]
   }
 }

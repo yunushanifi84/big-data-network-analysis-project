@@ -1,5 +1,6 @@
-"""Veri Akışı sayfası — Bronze / Silver / Gold detayları + akış görselleştirmesi."""
+"""Veri Akışı sayfası — SSE tabanlı gerçek zamanlı izleme."""
 import streamlit as st
+import streamlit.components.v1 as components
 import plotly.graph_objects as go
 
 st.set_page_config(page_title="Veri Akışı", page_icon="🌊", layout="wide")
@@ -8,371 +9,372 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from datetime import datetime  # noqa: E402
-from theme import apply_theme, section, pipeline_diagram, PALETTE  # noqa: E402
-from data_loader import (  # noqa: E402
-    get_layer_stats,
-    get_kafka_topic_offsets,
-    get_layer_freshness,
-)
-from streamlit_autorefresh import st_autorefresh  # noqa: E402
+from theme import apply_theme, section, pipeline_diagram  # noqa: E402
+from data_loader import get_layer_stats, get_best_run_per_model  # noqa: E402
 
 apply_theme()
 
-# ── Sidebar: canlı izleme kontrolleri ────────────────────────────────────────────
-auto_refresh = False
-refresh_sec = 10
+# ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("---")
     st.markdown("### ⚡ Canlı İzleme")
-    auto_refresh = st.toggle("Otomatik Yenile", value=True, key="live_auto_refresh")
-    if auto_refresh:
-        refresh_sec = st.select_slider(
-            "Yenileme aralığı",
-            options=[1, 5, 10, 30, 60],
-            value=1,
-            format_func=lambda x: f"{x} saniye",
-        )
-    else:
-        if st.button("🔄 Şimdi Yenile", key="manual_refresh_btn", use_container_width=True):
-            get_kafka_topic_offsets.clear()
-            get_layer_freshness.clear()
-            get_layer_stats.clear()
-            st.rerun()
-
-if auto_refresh:
-    _refresh_count = st_autorefresh(interval=refresh_sec * 1000, key="live_refresh_ctr")
-    get_kafka_topic_offsets.clear()
-    get_layer_freshness.clear()
-    # Her 30 yenilemede layer_stats'ı da temizle → zaman serisi gerçek zamanlı güncellenir
-    if _refresh_count % 30 == 0:
+    st.markdown(
+        '<p style="color:#10B981;font-size:0.8rem">● SSE — sayfa yenilemesiz</p>',
+        unsafe_allow_html=True,
+    )
+    if st.button("🔄 Katman istatistiklerini yenile", use_container_width=True):
         get_layer_stats.clear()
+        st.rerun()
 
 st.markdown("# 🌊 Veri Akışı")
 st.markdown(
-    '<p style="color:#94A3B8">Kafka\'dan ML\'e: 3 katmanlı Delta Lake mimarisi (Medallion architecture).</p>',
+    '<p style="color:#94A3B8">Kafka\'dan ML\'e: 3 katmanlı Delta Lake mimarisi.</p>',
     unsafe_allow_html=True,
 )
 st.markdown("---")
 
-# layer_df erken fetch — hem Canlı İzleme hem Animasyon hem de Katman Detayları kullanır
-layer_df = get_layer_stats()
-_layer_rows: dict = {}
-for _, _lr in layer_df.iterrows():
-    try:
-        _layer_rows[_lr["layer"]] = int(_lr["rows"])
-    except (TypeError, ValueError):
-        _layer_rows[_lr["layer"]] = 0
+# ── Canlı SSE bileşeni ────────────────────────────────────────────────────────
+section("🟢 Canlı İzleme", "WebSocket tabanlı anlık veri — sayfa yenilenmez")
 
-# ── Canlı İzleme ─────────────────────────────────────────────────────────────────────────────
-section("🟥 Canlı İzleme", "Producer ve streaming pipeline'in anlık durumu")
+_LIVE_HTML = """
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+     background:transparent;color:#E2E8F0;font-size:13px}
+.row{display:flex;gap:10px;margin-bottom:12px}
+.card{flex:1;background:rgba(15,23,42,0.6);border-radius:12px;
+      border:1px solid rgba(99,102,241,0.18);padding:14px 16px}
+/* Kafka card */
+.kafka-inner{display:flex;align-items:center;gap:14px}
+.k-dot{width:11px;height:11px;border-radius:50%;flex-shrink:0;background:#64748B}
+.k-info{flex:1}.k-label{font-weight:700;font-size:14px}
+.k-sub{color:#64748B;font-size:11px;margin-top:2px}
+.k-right{text-align:right}
+.k-count{font-size:22px;font-weight:700;color:#F1F5F9}
+.k-rate{color:#64748B;font-size:11px}
+/* Layer cards */
+.lcard{display:flex;align-items:center;gap:10px;
+       background:rgba(15,23,42,0.5);border-radius:10px;
+       border-left:3px solid;padding:10px 12px;flex:1}
+.licon{font-size:20px}
+.lname{font-weight:600;font-size:13px;color:#F1F5F9}
+.lstatus{font-size:11px;margin-top:2px}
+.lmeta{margin-left:auto;text-align:right}
+.lmeta-lbl{color:#64748B;font-size:10px}
+.lmeta-val{font-size:12px;font-weight:600;color:#E2E8F0}
+.lrows{font-size:10px;color:#64748B}
+/* Animation */
+@keyframes pf{
+  0%{left:-8px;opacity:0}15%{opacity:1}85%{opacity:1}
+  100%{left:calc(100% + 8px);opacity:0}}
+@keyframes glow{
+  0%,100%{box-shadow:0 0 4px 2px var(--g,rgba(255,255,255,.2))}
+  50%{box-shadow:0 0 18px 7px var(--g,rgba(255,255,255,.2))}}
+.af{display:flex;align-items:center;background:rgba(15,23,42,0.5);
+    border-radius:14px;border:1px solid rgba(99,102,241,.15);padding:18px 10px}
+.afbox{display:flex;flex-direction:column;align-items:center;justify-content:center;
+       width:96px;height:84px;border-radius:12px;font-weight:700;font-size:12px;
+       flex-shrink:0;position:relative;z-index:2;transition:opacity .4s}
+.afbox.w{animation:glow 1.4s ease-in-out infinite}
+.pipe{position:relative;flex:1;height:5px;border-radius:3px;overflow:visible;margin:0 -1px}
+.dot{position:absolute;top:50%;transform:translateY(-50%);
+     width:9px;height:9px;border-radius:50%;animation:pf linear infinite}
+/* Time series */
+canvas{display:block;border-radius:10px;width:100%}
+.legend{display:flex;gap:14px;margin-bottom:6px}
+.li{display:flex;align-items:center;gap:5px;font-size:11px;color:#94A3B8}
+.ld{width:12px;height:3px;border-radius:2px}
+/* Connection badge */
+.badge{display:inline-flex;align-items:center;gap:5px;
+       font-size:11px;color:#64748B;margin-bottom:10px}
+.bdot{width:7px;height:7px;border-radius:50%;background:#64748B}
+.bdot.on{background:#10B981}
+.sec{color:#94A3B8;font-size:10px;text-transform:uppercase;
+     letter-spacing:.08em;font-weight:600;margin-bottom:8px}
+</style></head><body>
 
-c_kafka, c_layers = st.columns([1, 2])
+<div class="badge"><div class="bdot" id="bd"></div><span id="bl">Bağlanıyor…</span></div>
 
-with c_kafka:
-    kstats = get_kafka_topic_offsets()
-    k_status = kstats.get("status", "error")
-    if k_status == "ok":
-        k_color, k_dot, k_label = "#10B981", "🟢", "Bağlı / Aktif"
-    elif k_status == "no_topic":
-        k_color, k_dot, k_label = "#F59E0B", "🟡", "Topic bulunamadı"
-    else:
-        k_color, k_dot, k_label = "#EF4444", "🔴", "Broker'a ulaşılamıyor"
+<!-- Kafka -->
+<div class="sec">Kafka Producer</div>
+<div class="card" style="margin-bottom:12px">
+  <div class="kafka-inner">
+    <div class="k-dot" id="kd"></div>
+    <div class="k-info">
+      <div class="k-label" id="kl">—</div>
+      <div class="k-sub">iot-network-traffic</div>
+    </div>
+    <div class="k-right">
+      <div class="k-count" id="kc">—</div>
+      <div class="k-rate" id="kr">— msg/s</div>
+    </div>
+  </div>
+</div>
 
-    err_html = (
-        f'<div style="color:#EF4444;font-size:0.7rem;margin-top:6px;word-break:break-all">'
-        f'{kstats.get("error", "")[:80]}</div>'
-    ) if k_status == "error" else ""
+<!-- Layers -->
+<div class="sec">Streaming Katmanlar</div>
+<div class="row">
+  <div class="lcard" id="lcard-Bronze" style="border-color:#CD7F32">
+    <div class="licon">🪣</div>
+    <div><div class="lname">Bronze</div><div class="lstatus" id="ls-Bronze">—</div></div>
+    <div class="lmeta">
+      <div class="lmeta-lbl">Son yazım</div>
+      <div class="lmeta-val" id="lm-Bronze">—</div>
+      <div class="lrows" id="lr-Bronze"></div>
+    </div>
+  </div>
+  <div class="lcard" id="lcard-Silver" style="border-color:#C0C0C0">
+    <div class="licon">🧹</div>
+    <div><div class="lname">Silver</div><div class="lstatus" id="ls-Silver">—</div></div>
+    <div class="lmeta">
+      <div class="lmeta-lbl">Son yazım</div>
+      <div class="lmeta-val" id="lm-Silver">—</div>
+      <div class="lrows" id="lr-Silver"></div>
+    </div>
+  </div>
+  <div class="lcard" id="lcard-Gold" style="border-color:#FFD700">
+    <div class="licon">✨</div>
+    <div><div class="lname">Gold</div><div class="lstatus" id="ls-Gold">—</div></div>
+    <div class="lmeta">
+      <div class="lmeta-lbl">Son yazım</div>
+      <div class="lmeta-val" id="lm-Gold">—</div>
+      <div class="lrows" id="lr-Gold"></div>
+    </div>
+  </div>
+</div>
 
-    st.markdown(
-        f"""
-        <div class="info-card" style="border-left:4px solid {k_color}">
-            <h4>📡 Kafka Producer</h4>
-            <div style="font-size:2.2rem;margin:6px 0">{k_dot}</div>
-            <div style="color:{k_color};font-weight:700;font-size:1rem;margin-bottom:14px">{k_label}</div>
-            <div style="background:rgba(15,23,42,0.5);padding:10px;border-radius:10px;text-align:center">
-                <div style="color:#64748B;font-size:0.72rem;text-transform:uppercase;margin-bottom:4px">Topic Mesaj (end offset)</div>
-                <div style="color:#F1F5F9;font-weight:700;font-size:1.6rem">{kstats.get('total_messages', 0):,}</div>
-            </div>
-            <div style="color:#64748B;font-size:0.75rem;margin-top:10px;text-align:center">
-                {kstats.get('topic', '—')} &nbsp;·&nbsp; {kstats.get('partitions', 0)} partition
-            </div>
-            {err_html}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+<!-- Animation -->
+<div class="sec">Canlı Veri Akışı</div>
+<div class="af" style="margin-bottom:12px">
+  <div class="afbox" id="af-Kafka" style="background:rgba(99,102,241,.12);border:2px solid #6366F1;color:#A5B4FC;opacity:.4;--g:rgba(99,102,241,.65)">
+    <div style="font-size:22px">📡</div><div style="margin-top:4px">Kafka</div>
+    <div style="font-size:10px;margin-top:2px" id="af-st-Kafka">—</div>
+  </div>
+  <div class="pipe" id="pipe-K" style="background:rgba(205,127,50,.12)"></div>
+  <div class="afbox" id="af-Bronze" style="background:rgba(205,127,50,.12);border:2px solid #CD7F32;color:#D4904E;opacity:.4;--g:rgba(205,127,50,.65)">
+    <div style="font-size:22px">🪣</div><div style="margin-top:4px">Bronze</div>
+    <div style="font-size:10px;margin-top:2px" id="af-st-Bronze">—</div>
+  </div>
+  <div class="pipe" id="pipe-B" style="background:rgba(192,192,192,.12)"></div>
+  <div class="afbox" id="af-Silver" style="background:rgba(192,192,192,.08);border:2px solid #C0C0C0;color:#C0C0C0;opacity:.4;--g:rgba(192,192,192,.65)">
+    <div style="font-size:22px">🧹</div><div style="margin-top:4px">Silver</div>
+    <div style="font-size:10px;margin-top:2px" id="af-st-Silver">—</div>
+  </div>
+  <div class="pipe" id="pipe-S" style="background:rgba(255,215,0,.12)"></div>
+  <div class="afbox" id="af-Gold" style="background:rgba(255,215,0,.08);border:2px solid #FFD700;color:#FFD700;opacity:.4;--g:rgba(255,215,0,.65)">
+    <div style="font-size:22px">✨</div><div style="margin-top:4px">Gold</div>
+    <div style="font-size:10px;margin-top:2px" id="af-st-Gold">—</div>
+  </div>
+</div>
 
-with c_layers:
-    freshness = get_layer_freshness()
-    lmeta_live = {
-        "Bronze": {"color": "#CD7F32", "icon": "🪣"},
-        "Silver": {"color": "#C0C0C0", "icon": "🧹"},
-        "Gold":   {"color": "#FFD700", "icon": "✨"},
+<!-- Time series -->
+<div class="sec">Satır Sayısı Geçmişi</div>
+<div class="legend">
+  <div class="li"><div class="ld" style="background:#CD7F32"></div>Bronze</div>
+  <div class="li"><div class="ld" style="background:#C0C0C0"></div>Silver</div>
+  <div class="li"><div class="ld" style="background:#FFD700"></div>Gold</div>
+</div>
+<canvas id="ts" height="180"></canvas>
+
+<script>
+const API = "http://localhost:5001";
+const MAX = 120;
+const hist = {Bronze:[], Silver:[], Gold:[]};
+const activeDots = {};
+
+// ── Canvas chart ──────────────────────────────────────────────────────────────
+const cv = document.getElementById("ts");
+const cx = cv.getContext("2d");
+
+function drawChart() {
+  const W = cv.offsetWidth || 640, H = 180;
+  cv.width = W;
+  cx.clearRect(0,0,W,H);
+  cx.fillStyle="rgba(15,23,42,0.5)";
+  if(cx.roundRect){cx.beginPath();cx.roundRect(0,0,W,H,10);cx.fill();}
+  else{cx.fillRect(0,0,W,H);}
+
+  const pl=52,pr=10,pt=10,pb=28, cw=W-pl-pr, ch=H-pt-pb;
+  const all=[...hist.Bronze,...hist.Silver,...hist.Gold].filter(v=>v>0);
+  const mx=all.length?Math.max(...all):1;
+  const n=Math.max(hist.Bronze.length,hist.Silver.length,hist.Gold.length,2);
+
+  // grid
+  for(let i=0;i<=4;i++){
+    const y=pt+ch*i/4;
+    cx.strokeStyle="rgba(100,116,139,.2)";cx.lineWidth=1;
+    cx.beginPath();cx.moveTo(pl,y);cx.lineTo(pl+cw,y);cx.stroke();
+    const v=Math.round(mx*(4-i)/4);
+    cx.fillStyle="#64748B";cx.font="9px sans-serif";cx.textAlign="right";
+    cx.fillText(v>=1000?(v/1000).toFixed(1)+"k":v, pl-4, y+3);
+  }
+
+  // lines
+  [["Bronze","#CD7F32"],["Silver","#C0C0C0"],["Gold","#FFD700"]].forEach(([k,c])=>{
+    const d=hist[k]; if(d.length<2)return;
+    cx.beginPath();cx.strokeStyle=c;cx.lineWidth=2;cx.lineJoin="round";
+    d.forEach((v,i)=>{
+      const x=pl+(i/(n-1))*cw, y=pt+ch-(v/mx)*ch;
+      i===0?cx.moveTo(x,y):cx.lineTo(x,y);
+    });
+    cx.stroke();
+  });
+
+  cx.fillStyle="#64748B";cx.font="9px sans-serif";cx.textAlign="center";
+  cx.fillText("son "+n+"s",pl+cw/2,H-8);
+}
+
+// ── Dot animation ─────────────────────────────────────────────────────────────
+function clearDots(pipeId){
+  const p=document.getElementById(pipeId);
+  if(!p)return;
+  p.querySelectorAll(".dot").forEach(d=>d.remove());
+  if(activeDots[pipeId]){clearInterval(activeDots[pipeId]);delete activeDots[pipeId];}
+}
+function addDots(pipeId,color,count=3){
+  clearDots(pipeId);
+  const p=document.getElementById(pipeId);if(!p)return;
+  const dur=1.2;
+  for(let i=0;i<count;i++){
+    const d=document.createElement("div");d.className="dot";
+    d.style.cssText="background:"+color+";animation-duration:"+dur+"s;animation-delay:"+(i*dur/count).toFixed(2)+"s";
+    p.appendChild(d);
+  }
+}
+
+// ── Status helpers ────────────────────────────────────────────────────────────
+function layerState(info){
+  if(!info||!info.exists) return {text:"Oluşturulmadı",color:"#64748B",sym:"⚫"};
+  if(info.active)          return {text:"Yazıyor",      color:"#10B981",sym:"🟢"};
+  if(info.has_data)        return {text:"Tamamlandı",   color:"#3B82F6",sym:"🔵"};
+  return                          {text:"Bekliyor",     color:"#F59E0B",sym:"🟡"};
+}
+
+function setNode(name, info, pipeSuffix, dotColor, pipeActive, pipeIdle){
+  const el=document.getElementById("af-"+name);
+  const st=document.getElementById("af-st-"+name);
+  const pipe=pipeSuffix?document.getElementById("pipe-"+pipeSuffix):null;
+  if(!el)return;
+  const s=layerState(info);
+  st.textContent=s.sym+" "+s.text; st.style.color=s.color;
+  if(info&&info.active){
+    el.style.opacity="1"; el.classList.add("w");
+    if(pipe){pipe.style.background=pipeActive; addDots("pipe-"+pipeSuffix,dotColor);}
+  }else if(info&&info.has_data){
+    el.style.opacity="1"; el.classList.remove("w");
+    if(pipe){pipe.style.background=pipeIdle; clearDots("pipe-"+pipeSuffix);}
+  }else{
+    el.style.opacity="0.4"; el.classList.remove("w");
+    if(pipe){pipe.style.background=pipeIdle; clearDots("pipe-"+pipeSuffix);}
+  }
+}
+
+// ── SSE ───────────────────────────────────────────────────────────────────────
+function connect(){
+  const es=new EventSource(API+"/api/stream");
+
+  es.onopen=()=>{
+    document.getElementById("bd").className="bdot on";
+    document.getElementById("bl").textContent="Canlı — sayfa yenilemesiz";
+  };
+
+  es.onmessage=function(e){
+    const d=JSON.parse(e.data);
+    const kafka=d.kafka, layers=d.layers;
+
+    // Kafka card
+    const ok=kafka.status==="ok";
+    document.getElementById("kd").style.background=ok?"#10B981":"#EF4444";
+    document.getElementById("kl").textContent=ok?"Bağlı / Aktif":"Bağlantı yok";
+    document.getElementById("kc").textContent=kafka.total.toLocaleString();
+    document.getElementById("kr").textContent=kafka.rate+" msg/s";
+
+    // Layer cards + animation nodes
+    ["Bronze","Silver","Gold"].forEach(n=>{
+      const info=layers[n]||{};
+      const s=layerState(info);
+      const lsEl=document.getElementById("ls-"+n);
+      const lmEl=document.getElementById("lm-"+n);
+      const lrEl=document.getElementById("lr-"+n);
+      if(lsEl){lsEl.textContent=s.sym+" "+s.text; lsEl.style.color=s.color;}
+      if(lmEl) lmEl.textContent=info.last_mod||"—";
+      if(lrEl) lrEl.textContent=info.rows>0?info.rows.toLocaleString()+" satır":"";
+    });
+
+    // Animation
+    // Kafka node glow — pipe-K is driven by Bronze.active (see setNode below)
+    const kNode=document.getElementById("af-Kafka");
+    const kSt=document.getElementById("af-st-Kafka");
+    if(kNode){
+      kNode.style.opacity=ok?"1":"0.4";
+      ok?kNode.classList.add("w"):kNode.classList.remove("w");
+      kSt.textContent=ok?"● Aktif":"● Kapalı";
+      kSt.style.color=ok?"#10B981":"#EF4444";
     }
-    rows_html = ""
-    for lname, lm in lmeta_live.items():
-        fi = freshness.get(lname, {})
-        exists = fi.get("exists", False)
-        active = fi.get("active", False)
-        last_mod = fi.get("last_modified") or "—"
-        age_sec = fi.get("age_sec")
-        has_data = _layer_rows.get(lname, 0) > 0
-        if not exists:
-            dot, dot_color, status_lbl, age_str = "⚫", "#64748B", "Henüz oluşturulmadı", "—"
-        elif active:
-            dot, dot_color, status_lbl = "🟢", "#10B981", "Aktif — yazıyor"
-            age_str = f"{age_sec}s önce" if age_sec is not None else "—"
-        elif has_data:
-            dot, dot_color, status_lbl = "🔵", "#3B82F6", "Tamamlandı"
-            age_str = f"{age_sec}s önce" if age_sec is not None else "—"
-        else:
-            dot, dot_color, status_lbl = "🟡", "#F59E0B", "Bekliyor — veri yok"
-            age_str = f"{age_sec}s önce" if age_sec is not None else "—"
-        rows_html += f"""
-        <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;
-                    background:rgba(15,23,42,0.45);border-radius:10px;margin-bottom:8px;
-                    border-left:3px solid {lm['color']}">
-            <div style="font-size:1.4rem">{dot}</div>
-            <div style="flex:1">
-                <div style="color:#F1F5F9;font-weight:600">{lm['icon']} {lname}</div>
-                <div style="color:{dot_color};font-size:0.78rem;margin-top:2px">{status_lbl}</div>
-            </div>
-            <div style="text-align:right">
-                <div style="color:#94A3B8;font-size:0.7rem">Son yazım</div>
-                <div style="color:#E2E8F0;font-size:0.85rem;font-weight:600">{last_mod}</div>
-                <div style="color:#64748B;font-size:0.7rem">{age_str}</div>
-            </div>
-        </div>
-        """
+    // Each pipe animates when the DOWNSTREAM node is being written to:
+    //   pipe-K → Bronze active (data flowing INTO Bronze)
+    //   pipe-B → Silver active (data flowing INTO Silver)
+    //   pipe-S → Gold active  (data flowing INTO Gold)
+    setNode("Bronze",layers["Bronze"],"K","#E8964A","rgba(205,127,50,.45)","rgba(205,127,50,.12)");
+    setNode("Silver",layers["Silver"],"B","#C0C0C0","rgba(192,192,192,.45)","rgba(192,192,192,.12)");
+    setNode("Gold",  layers["Gold"],  "S","#FFD700","rgba(255,215,0,.45)","rgba(255,215,0,.12)");
 
-    _now_str = datetime.now().strftime("%H:%M:%S")
-    st.markdown(
-        f"""
-        <div class="info-card">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-                <h4 style="margin:0">🔄 Streaming Katman Durumu</h4>
-                <span style="color:#64748B;font-size:0.75rem">Güncellendi: {_now_str}</span>
-            </div>
-            <p style="color:#64748B;font-size:0.78rem;margin-bottom:10px">
-                Son parquet/delta-log değişikliğinden ≤120s geçmişse aktif sayılır
-            </p>
-            {rows_html}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    // Time series
+    ["Bronze","Silver","Gold"].forEach(n=>{
+      const r=(layers[n]||{}).rows||0;
+      hist[n].push(r); if(hist[n].length>MAX)hist[n].shift();
+    });
+    if(hist.Bronze.some(v=>v>0)||hist.Silver.some(v=>v>0)||hist.Gold.some(v=>v>0))
+      drawChart();
+  };
+
+  es.onerror=()=>{
+    document.getElementById("bd").className="bdot";
+    document.getElementById("bl").textContent="Bağlantı kesildi — yeniden bağlanıyor…";
+    setTimeout(connect, 3000);
+  };
+}
+
+connect();
+window.addEventListener("resize", drawChart);
+</script></body></html>
+"""
+
+components.html(_LIVE_HTML, height=680)
 
 st.markdown("---")
 
-# ── Pipeline ─────────────────────────────────────────────────────────────────────────────
+# ── Pipeline diyagramı (statik) ───────────────────────────────────────────────
 pipeline_diagram([
     {"icon": "📡", "title": "Producer", "desc": "kafka/producer.py"},
-    {"icon": "🪣", "title": "Bronze", "desc": "Ham JSON"},
-    {"icon": "🧹", "title": "Silver", "desc": "Şema + temizlik"},
-    {"icon": "✨", "title": "Gold", "desc": "ML-ready"},
+    {"icon": "🪣", "title": "Bronze",   "desc": "Ham JSON"},
+    {"icon": "🧹", "title": "Silver",   "desc": "Şema + temizlik"},
+    {"icon": "✨", "title": "Gold",     "desc": "ML-ready"},
 ])
 
-# ── Canlı Akış Animasyonu ─────────────────────────────────────────────────────
-st.markdown("---")
-section("🎬 Canlı Akış Animasyonu", "Kafka → Bronze → Silver → Gold gerçek zamanlı veri hareketi")
+# ── Katman detayları (statik, manuel yenile) ──────────────────────────────────
+layer_df = get_layer_stats()
 
-_b_active = freshness.get("Bronze", {}).get("active", False)
-_s_active = freshness.get("Silver", {}).get("active", False)
-_g_active = freshness.get("Gold", {}).get("active", False)
-_k_ok     = kstats.get("status") == "ok"
-
-# Tüm değerleri önce düz Python değişkenlerine at — f-string içinde iç içe
-# quote ve koşul olmadığı için her Python sürümünde güvenle çalışır.
-
-def _make_dots(color, active, count=3):
-    if not active:
-        return ""
-    step = 1.2 / count
-    parts = []
-    for i in range(count):
-        parts.append(
-            '<div class="anim-dot" style="background:' + color + ';'
-            'animation-duration:1.2s;animation-delay:' + f"{i * step:.2f}" + 's"></div>'
-        )
-    return "".join(parts)
-
-# Kafka
-_k_op    = "1"      if _k_ok     else "0.4"
-_k_sc    = "#10B981" if _k_ok    else "#EF4444"
-_k_st    = "&#9679; Aktif"       if _k_ok     else "&#9679; Kapalı"
-_k_anim  = "animation:glow-pulse 1.4s ease-in-out infinite;--glow:rgba(99,102,241,0.65);" if _k_ok else ""
-_k_pbg   = "rgba(205,127,50,0.45)"  if _k_ok     else "rgba(205,127,50,0.12)"
-_k_dots  = _make_dots("#E8964A", _k_ok)
-
-# Bronze
-_b_done  = (not _b_active) and _layer_rows.get("Bronze", 0) > 0
-_b_op    = "1"       if (_b_active or _b_done) else "0.4"
-_b_sc    = "#10B981" if _b_active else ("#3B82F6" if _b_done else "#64748B")
-_b_st    = "&#9679; Yazıyor" if _b_active else ("&#10003; Tamamland&#305;" if _b_done else "&#9675; Bekliyor")
-_b_anim  = "animation:glow-pulse 1.4s ease-in-out infinite;--glow:rgba(205,127,50,0.65);" if _b_active else ""
-_b_pbg   = "rgba(192,192,192,0.45)" if _b_active else "rgba(192,192,192,0.12)"
-_b_dots  = _make_dots("#C0C0C0", _b_active)
-
-# Silver
-_s_done  = (not _s_active) and _layer_rows.get("Silver", 0) > 0
-_s_op    = "1"       if (_s_active or _s_done) else "0.4"
-_s_sc    = "#10B981" if _s_active else ("#3B82F6" if _s_done else "#64748B")
-_s_st    = "&#9679; Yazıyor" if _s_active else ("&#10003; Tamamland&#305;" if _s_done else "&#9675; Bekliyor")
-_s_anim  = "animation:glow-pulse 1.4s ease-in-out infinite;--glow:rgba(192,192,192,0.65);" if _s_active else ""
-_s_pbg   = "rgba(255,215,0,0.45)"   if _s_active else "rgba(255,215,0,0.12)"
-_s_dots  = _make_dots("#FFD700", _s_active)
-
-# Gold
-_g_done  = (not _g_active) and _layer_rows.get("Gold", 0) > 0
-_g_op    = "1"       if (_g_active or _g_done) else "0.4"
-_g_sc    = "#10B981" if _g_active else ("#3B82F6" if _g_done else "#64748B")
-_g_st    = "&#9679; Yazıyor" if _g_active else ("&#10003; Tamamland&#305;" if _g_done else "&#9675; Bekliyor")
-_g_anim  = "animation:glow-pulse 1.4s ease-in-out infinite;--glow:rgba(255,215,0,0.65);"  if _g_active else ""
-
-_anim_html = (
-    "<style>"
-    "@keyframes particle-flow{"
-    "0%{left:-10px;opacity:0}"
-    "15%{opacity:1}"
-    "85%{opacity:1}"
-    "100%{left:calc(100% + 10px);opacity:0}"
-    "}"
-    "@keyframes glow-pulse{"
-    "0%,100%{box-shadow:0 0 4px 2px var(--glow,rgba(255,255,255,0.2))}"
-    "50%{box-shadow:0 0 18px 7px var(--glow,rgba(255,255,255,0.2))}"
-    "}"
-    ".af-wrap{display:flex;align-items:center;padding:28px 16px;"
-    "background:rgba(15,23,42,0.55);border-radius:16px;"
-    "border:1px solid rgba(99,102,241,0.18)}"
-    ".af-box{display:flex;flex-direction:column;align-items:center;"
-    "justify-content:center;width:118px;height:100px;border-radius:14px;"
-    "font-weight:700;font-size:0.82rem;flex-shrink:0;position:relative;z-index:2}"
-    ".af-pipe{position:relative;flex:1;height:6px;border-radius:3px;"
-    "overflow:visible;margin:0 -1px}"
-    ".af-dot{position:absolute;top:50%;transform:translateY(-50%);"
-    "width:10px;height:10px;border-radius:50%;"
-    "animation:particle-flow linear infinite}"
-    "</style>"
-    # ── Kafka ──
-    '<div class="af-wrap">'
-    '<div class="af-box" style="background:rgba(99,102,241,0.12);'
-    "border:2px solid #6366F1;opacity:" + _k_op + ";color:#A5B4FC;" + _k_anim + '">'
-    '<div style="font-size:1.8rem">&#128225;</div>'
-    '<div style="margin-top:4px">Kafka</div>'
-    '<div style="font-size:0.65rem;color:' + _k_sc + ';margin-top:3px">' + _k_st + '</div>'
-    "</div>"
-    # ── Kafka→Bronze pipe ──
-    '<div class="af-pipe" style="background:' + _k_pbg + '">' + _k_dots + "</div>"
-    # ── Bronze ──
-    '<div class="af-box" style="background:rgba(205,127,50,0.12);'
-    "border:2px solid #CD7F32;opacity:" + _b_op + ";color:#D4904E;" + _b_anim + '">'
-    '<div style="font-size:1.8rem">&#129379;</div>'
-    '<div style="margin-top:4px">Bronze</div>'
-    '<div style="font-size:0.65rem;color:' + _b_sc + ';margin-top:3px">' + _b_st + '</div>'
-    "</div>"
-    # ── Bronze→Silver pipe ──
-    '<div class="af-pipe" style="background:' + _b_pbg + '">' + _b_dots + "</div>"
-    # ── Silver ──
-    '<div class="af-box" style="background:rgba(192,192,192,0.08);'
-    "border:2px solid #C0C0C0;opacity:" + _s_op + ";color:#C0C0C0;" + _s_anim + '">'
-    '<div style="font-size:1.8rem">&#129529;</div>'
-    '<div style="margin-top:4px">Silver</div>'
-    '<div style="font-size:0.65rem;color:' + _s_sc + ';margin-top:3px">' + _s_st + '</div>'
-    "</div>"
-    # ── Silver→Gold pipe ──
-    '<div class="af-pipe" style="background:' + _s_pbg + '">' + _s_dots + "</div>"
-    # ── Gold ──
-    '<div class="af-box" style="background:rgba(255,215,0,0.08);'
-    "border:2px solid #FFD700;opacity:" + _g_op + ";color:#FFD700;" + _g_anim + '">'
-    '<div style="font-size:1.8rem">&#10024;</div>'
-    '<div style="margin-top:4px">Gold</div>'
-    '<div style="font-size:0.65rem;color:' + _g_sc + ';margin-top:3px">' + _g_st + '</div>'
-    "</div>"
-    "</div>"
-)
-
-st.markdown(_anim_html, unsafe_allow_html=True)
-
-# ── Canlı Zaman Serisi ────────────────────────────────────────────────────────
-_MAX_HIST = 120
-
-if "flow_history" not in st.session_state:
-    st.session_state.flow_history = []
-
-_b = layer_df[layer_df["layer"] == "Bronze"]["rows"].values[0] if not layer_df.empty else None
-_s = layer_df[layer_df["layer"] == "Silver"]["rows"].values[0] if not layer_df.empty else None
-_g = layer_df[layer_df["layer"] == "Gold"]["rows"].values[0] if not layer_df.empty else None
-
-if any(v is not None for v in [_b, _s, _g]):
-    st.session_state.flow_history.append(
-        {"ts": datetime.now(), "bronze": _b, "silver": _s, "gold": _g}
-    )
-    if len(st.session_state.flow_history) > _MAX_HIST:
-        st.session_state.flow_history = st.session_state.flow_history[-_MAX_HIST:]
-
-if len(st.session_state.flow_history) >= 1:
-    _hist  = st.session_state.flow_history
-    _times = [h["ts"] for h in _hist]
-    _ts_fig = go.Figure()
-    for _lname, _color, _fill in [
-        ("bronze", "#CD7F32", "rgba(205,127,50,0.10)"),
-        ("silver", "#C0C0C0", "rgba(192,192,192,0.10)"),
-        ("gold",   "#FFD700", "rgba(255,215,0,0.10)"),
-    ]:
-        _ts_fig.add_trace(go.Scatter(
-            x=_times,
-            y=[h.get(_lname) for h in _hist],
-            mode="lines",
-            name=_lname.capitalize(),
-            line=dict(color=_color, width=2),
-            fill="tozeroy",
-            fillcolor=_fill,
-        ))
-    _ts_fig.update_layout(
-        height=260,
-        margin=dict(l=0, r=0, t=10, b=0),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(15,23,42,0.5)",
-        legend=dict(orientation="h", y=1.08, x=0, font=dict(color="#94A3B8")),
-        xaxis=dict(showgrid=False, color="#64748B", tickfont=dict(color="#64748B")),
-        yaxis=dict(
-            showgrid=True,
-            gridcolor="rgba(100,116,139,0.15)",
-            color="#64748B",
-            tickfont=dict(color="#64748B"),
-            title=dict(text="Satır sayısı", font=dict(color="#64748B")),
-        ),
-    )
-    st.plotly_chart(_ts_fig, use_container_width=True)
-else:
-    st.caption("Zaman serisi için en az 2 veri noktası bekleniyor…")
-
-st.markdown("---")
-
-# ── Katman detayları ─────────────────────────────────────────────────────────
 section("📦 Katman Detayları", "Her katmanın rolü ve mevcut durumu")
 
 layer_meta = {
     "Bronze": {
-        "icon": "🪣",
-        "color": "#CD7F32",
+        "icon": "🪣", "color": "#CD7F32",
         "purpose": "Kafka'dan gelen ham JSON mesajlarını şemasız olarak korur.",
         "writes": "writeStream → Delta · append-only",
-        "schema": "json_payload (string) + Kafka metadata (topic, partition, offset, timestamp)",
+        "schema": "json_payload (string) + Kafka metadata",
         "tech": ["Spark Structured Streaming", "Delta Lake", "Append mode"],
     },
     "Silver": {
-        "icon": "🧹",
-        "color": "#C0C0C0",
+        "icon": "🧹", "color": "#C0C0C0",
         "purpose": "Şema uygulanır, null/duplike/format hataları temizlenir.",
         "writes": "Bronze → from_json + filtre → Delta",
         "schema": "Edge-IIoTset şeması (60+ kolon) + Attack_type label",
         "tech": ["from_json + schema inference", "Null/dup filtreleme", "Append mode"],
     },
     "Gold": {
-        "icon": "✨",
-        "color": "#FFD700",
+        "icon": "✨", "color": "#FFD700",
         "purpose": "ML'e hazır feature tablosu — 5 yeni türetilmiş özellik dahil.",
         "writes": "Silver → FeatureEngineer → ml_ready_compact",
         "schema": "Numerik feature'lar + label_indexed (StringIndexer)",
@@ -391,7 +393,6 @@ for _, row in layer_df.iterrows():
         cols_v = str(int(row["columns"]))
     except (ValueError, TypeError):
         cols_v = "—"
-
     st.markdown(
         f"""
         <div class="info-card" style="border-left:4px solid {color}">
@@ -425,45 +426,32 @@ for _, row in layer_df.iterrows():
         unsafe_allow_html=True,
     )
 
-# ── Sankey: veri akış hacmi ─────────────────────────────────────────────────
+# ── Sankey ────────────────────────────────────────────────────────────────────
 section("🔗 Veri Akış Hacmi", "Katmanlar arası satır akışı")
 
 bronze = layer_df[layer_df["layer"] == "Bronze"]["rows"].iloc[0] if not layer_df.empty else None
 silver = layer_df[layer_df["layer"] == "Silver"]["rows"].iloc[0] if not layer_df.empty else None
-gold = layer_df[layer_df["layer"] == "Gold"]["rows"].iloc[0] if not layer_df.empty else None
+gold   = layer_df[layer_df["layer"] == "Gold"]["rows"].iloc[0]   if not layer_df.empty else None
 
 if bronze and silver and gold:
-    fig = go.Figure(
-        go.Sankey(
-            arrangement="snap",
-            node=dict(
-                pad=24,
-                thickness=22,
-                line=dict(color="rgba(99,102,241,0.5)", width=1),
-                label=[
-                    f"Kafka<br>{bronze:,}",
-                    f"Bronze<br>{bronze:,}",
-                    f"Silver<br>{silver:,}",
-                    f"Gold<br>{gold:,}",
-                ],
-                color=["#6366F1", "#CD7F32", "#C0C0C0", "#FFD700"],
-            ),
-            link=dict(
-                source=[0, 1, 2],
-                target=[1, 2, 3],
-                value=[bronze, silver, gold],
-                color=[
-                    "rgba(99,102,241,0.35)",
-                    "rgba(192,192,192,0.35)",
-                    "rgba(255,215,0,0.35)",
-                ],
-            ),
-        )
-    )
+    fig = go.Figure(go.Sankey(
+        arrangement="snap",
+        node=dict(
+            pad=24, thickness=22,
+            line=dict(color="rgba(99,102,241,0.5)", width=1),
+            label=[f"Kafka<br>{bronze:,}", f"Bronze<br>{bronze:,}",
+                   f"Silver<br>{silver:,}", f"Gold<br>{gold:,}"],
+            color=["#6366F1", "#CD7F32", "#C0C0C0", "#FFD700"],
+        ),
+        link=dict(
+            source=[0, 1, 2], target=[1, 2, 3],
+            value=[bronze, silver, gold],
+            color=["rgba(99,102,241,0.35)", "rgba(192,192,192,0.35)", "rgba(255,215,0,0.35)"],
+        ),
+    ))
     fig.update_layout(height=380, margin=dict(l=10, r=10, t=20, b=20))
     st.plotly_chart(fig, use_container_width=True)
 
-    # Düşüş oranları
     c1, c2, c3 = st.columns(3)
     with c1:
         st.metric("Bronze → Silver", f"{silver:,}", f"{(silver-bronze)/bronze*100:+.1f}%")
@@ -474,19 +462,16 @@ if bronze and silver and gold:
 else:
     st.info("Katmanlar henüz veri ile dolmamış — pipeline'ı çalıştırın.")
 
-# ── Komutlar ─────────────────────────────────────────────────────────────────
+# ── Komutlar ──────────────────────────────────────────────────────────────────
 section("⚡ Çalıştırma Komutları", "Kendiniz deneyin")
 st.code(
     """# 1) Tüm stack
 docker compose up -d
 
-# 2) Producer ile veri akışını başlat
-docker compose up kafka-producer
-
-# 3) Bronze → Silver → Gold streaming pipeline
+# 2) Streaming pipeline
 docker compose exec spark-master spark-submit /opt/bitnami/spark/spark/run_streaming_pipeline.py
 
-# 4) Model eğitimi
+# 3) Model eğitimi
 docker compose exec spark-master spark-submit /opt/bitnami/spark/ml/03_random_forest.py""",
     language="bash",
 )
