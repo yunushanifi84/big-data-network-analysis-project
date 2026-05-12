@@ -25,13 +25,8 @@ def get_spark(app_name: str = "IoT-Intrusion-Detection") -> SparkSession:
     spark = (
         SparkSession.builder
         .appName(app_name)
-        # ── Delta Lake JAR ──
-        .config(
-            "spark.jars.packages",
-            "io.delta:delta-core_2.12:2.4.0,"
-            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2"
-        )
         # ── Delta Lake Extensions ──
+        # JAR'lar Dockerfile build sırasında /opt/bitnami/spark/jars/ altına kopyalanır.
         .config(
             "spark.sql.extensions",
             "io.delta.sql.DeltaSparkSessionExtension"

@@ -25,22 +25,26 @@ refresh_sec = 10
 with st.sidebar:
     st.markdown("---")
     st.markdown("### ⚡ Canlı İzleme")
-    auto_refresh = st.toggle("Otomatik Yenile", value=False, key="live_auto_refresh")
+    auto_refresh = st.toggle("Otomatik Yenile", value=True, key="live_auto_refresh")
     if auto_refresh:
         refresh_sec = st.select_slider(
             "Yenileme aralığı",
-            options=[5, 10, 30, 60],
-            value=10,
+            options=[1, 5, 10, 30, 60],
+            value=1,
             format_func=lambda x: f"{x} saniye",
         )
     else:
-        if st.button("🔄 Şimdi Yenile", key="manual_refresh_btn"):
+        if st.button("🔄 Şimdi Yenile", key="manual_refresh_btn", use_container_width=True):
             get_kafka_topic_offsets.clear()
             get_layer_freshness.clear()
+            get_layer_stats.clear()
             st.rerun()
 
 if auto_refresh:
     _refresh_count = st_autorefresh(interval=refresh_sec * 1000, key="live_refresh_ctr")
+    # Her autorefresh döngüsünde kısa-TTL cache'leri temizle — stale veri gösterilmesini önler
+    get_kafka_topic_offsets.clear()
+    get_layer_freshness.clear()
 
 st.markdown("# 🌊 Veri Akışı")
 st.markdown(

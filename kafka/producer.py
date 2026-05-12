@@ -55,7 +55,11 @@ def build_message(row):
     if 'flow_id' not in message:
         src_port = message.get('tcp.srcport', message.get('udp.port', '0'))
         dst_port = message.get('tcp.dstport', '0')
-        message['flow_id'] = f"{message['source_ip']}:{src_port}-{message['dest_ip']}:{dst_port}"
+        message['flow_id'] = (
+            f"{message['source_ip']}:{src_port}"
+            f"-{message['dest_ip']}:{dst_port}"
+            f"-{message['timestamp']}"
+        )
 
     return message
 

@@ -70,6 +70,11 @@ with st.sidebar:
         """
     )
     st.markdown("---")
+    if st.button("🔄 Yenile", key="home_refresh", use_container_width=True):
+        get_layer_stats.clear()
+        get_best_run_per_model.clear()
+        load_mlflow_runs.clear()
+        st.rerun()
     st.markdown(
         '<p style="color:#64748B;font-size:0.75rem">'
         "Soldaki menüden sayfa seçin · Veriler Delta Lake ve MLflow'dan canlı okunur"
@@ -115,7 +120,12 @@ pipeline_diagram([
 ])
 
 # ── Hızlı KPI'lar ────────────────────────────────────────────────────────────
-from data_loader import get_layer_stats, get_best_run_per_model, ENGINEERED_FEATURES  # noqa: E402
+from data_loader import (  # noqa: E402
+    get_layer_stats,
+    get_best_run_per_model,
+    load_mlflow_runs,
+    ENGINEERED_FEATURES,
+)
 
 layer_df = get_layer_stats()
 best_df = get_best_run_per_model()

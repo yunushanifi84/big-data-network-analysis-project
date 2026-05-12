@@ -12,11 +12,20 @@ from theme import apply_theme, section, info_card, pipeline_diagram
 from data_loader import (
     get_layer_stats,
     get_best_run_per_model,
+    load_mlflow_runs,
     ENGINEERED_FEATURES,
     MODELS,
 )
 
 apply_theme()
+
+with st.sidebar:
+    st.markdown("---")
+    if st.button("🔄 Yenile", key="genel_refresh", use_container_width=True):
+        get_layer_stats.clear()
+        get_best_run_per_model.clear()
+        load_mlflow_runs.clear()
+        st.rerun()
 
 st.markdown("# 📊 Genel Bakış")
 st.markdown(
