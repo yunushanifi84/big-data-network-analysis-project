@@ -27,6 +27,7 @@ import time
 from pyspark.ml import Pipeline
 from pyspark.ml.classification import LogisticRegression
 from pyspark.ml.evaluation import MulticlassClassificationEvaluator
+from pyspark.ml.feature import StandardScaler
 from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 
 sys.path.insert(0, "/opt/bitnami/spark")
@@ -217,15 +218,21 @@ def main():
     print(f"   📌 Feature sayısı: {len(feature_cols)} | Sınıf sayısı: {num_classes}")
 
     print("\n[2/6] Multinomial Logistic Regression pipeline kuruluyor...")
+    scaler = StandardScaler(
+        inputCol="features",
+        outputCol="scaled_features",
+        withMean=False,
+        withStd=True,
+    )
     lr = LogisticRegression(
-        featuresCol="features",
+        featuresCol="scaled_features",
         labelCol="label",
         weightCol="classWeight",
         family="multinomial",
         maxIter=args.max_iter,
         regParam=0.01,
     )
-    pipeline = Pipeline(stages=[lr])
+    pipeline = Pipeline(stages=[scaler, lr])
 
     print("\n[3/6] Cross Validation çalıştırılıyor...")
     if args.fast:

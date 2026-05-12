@@ -287,7 +287,7 @@ def main():
     spark = get_spark("Model-5-NaiveBayes")
 
     # ── 2) Ortak pipeline ──
-    print("\n[1/8] Veri pipeline hazırlanıyor...")
+    print("\n[1/7] Veri pipeline hazırlanıyor...")
     stage_start = time.perf_counter()
     train_df, test_df, feature_cols = run_ml_pipeline(
         spark,
@@ -297,27 +297,26 @@ def main():
     print(f"   ⏱️ Ortak pipeline süresi: {time.perf_counter() - stage_start:.2f}s")
     print(f"   📌 Feature sayısı: {len(feature_cols)}")
 
-    # ── 3) Negatif değer kontrolü & MinMaxScaler ──
-    print("\n[2/8] Feature değer aralığı kontrol ediliyor...")
-    neg_start = time.perf_counter()
-    train_df, test_df, scaler_model, used_scaler = check_and_fix_negatives(
-        train_df, test_df
+    # ── 3) Naive Bayes + MinMaxScaler Pipeline ──
+    print("\n[2/7] Naive Bayes + MinMaxScaler pipeline kuruluyor...")
+    scaler = MinMaxScaler(
+        inputCol="features",
+        outputCol="scaled_features",
+        min=0.0,
+        max=1.0,
     )
-    print(f"   ⏱️ Negatif kontrol süresi: {time.perf_counter() - neg_start:.2f}s")
-
-    # ── 4) Naive Bayes + Pipeline ──
-    print("\n[3/8] Naive Bayes pipeline kuruluyor...")
     nb = NaiveBayes(
-        featuresCol="features",
+        featuresCol="scaled_features",
         labelCol="label",
         modelType="multinomial",
         smoothing=1.0,
     )
     # NaiveBayes weightCol desteklemez — classWeight kullanılmaz
-    pipeline = Pipeline(stages=[nb])
+    # MinMaxScaler her CV fold'unda yeniden fit edilir (veri sızıntısı olmaz)
+    pipeline = Pipeline(stages=[scaler, nb])
 
-    # ── 5) Cross Validation ──
-    print("\n[4/8] Cross Validation ile hiperparametre optimizasyonu...")
+    # ── 4) Cross Validation ──
+    print("\n[3/7] Cross Validation ile hiperparametre optimizasyonu...")
 
     # Spark 3.x'te sadece "multinomial" ve "complement" desteklenir;
     # "gaussian" ≥ 3.0'da yok. Güvenli liste:
@@ -374,20 +373,20 @@ def main():
         f"smoothing={best_nb_model.getSmoothing()}"
     )
 
-    # ── 6) CV sonuçları ──
-    print("\n[5/8] Cross Validation sonuçları analiz ediliyor...")
+    # ── 5) CV sonuçları ──
+    print("\n[4/7] Cross Validation sonuçları analiz ediliyor...")
     cv_results = analyze_cv_results(cv_model, param_grid)
 
-    # ── 7) Test seti değerlendirme ──
-    print("\n[6/8] Test seti üzerinde değerlendirme...")
+    # ── 6) Test seti değerlendirme ──
+    print("\n[5/7] Test seti üzerinde değerlendirme...")
     eval_start = time.perf_counter()
     predictions = best_pipeline_model.transform(test_df)
     metrics = evaluate_model(predictions)
     confusion = compute_confusion_matrix(predictions)
     print(f"   ⏱️ Test değerlendirme süresi: {time.perf_counter() - eval_start:.2f}s")
 
-    # ── 8) NB model analizi ──
-    print("\n[7/8] Naive Bayes model analizi ve feature importance...")
+    # ── 7) NB model analizi ──
+    print("\n[6/7] Naive Bayes model analizi ve feature importance...")
     fi_start = time.perf_counter()
 
     nb_info = analyze_nb_model(best_nb_model)
@@ -405,13 +404,13 @@ def main():
     save_feature_importance_csv(all_features, csv_path)
     print(f"   ⏱️ Feature importance süresi: {time.perf_counter() - fi_start:.2f}s")
 
-    # ── 9) MLflow Logging ──
-    print("\n[8/8] MLflow'a loglanıyor...")
+    # ── 8) MLflow Logging ──
+    print("\n[7/7] MLflow'a loglanıyor...")
     mlflow_start = time.perf_counter()
     best_params = {
         "modelType": str(best_nb_model.getModelType()),
         "smoothing": float(best_nb_model.getSmoothing()),
-        "used_minmax_scaler": used_scaler,
+        "used_minmax_scaler": True,
         "numFolds": num_folds,
         "grid_size": len(param_grid),
         "cv_total_fits": total_cv_runs,
@@ -468,7 +467,7 @@ def main():
                 f"Smoothing:        {nb_info.get('smoothing', 'N/A')}",
                 f"Sınıf sayısı:     {nb_info.get('num_classes', 'N/A')}",
                 f"Feature sayısı:   {nb_info.get('num_features', 'N/A')}",
-                f"MinMaxScaler:     {'Evet' if used_scaler else 'Hayır'}",
+                f"MinMaxScaler:     Evet (Pipeline içinde, fold başına fit)",
                 f"Class priors:     {nb_info.get('class_priors', 'N/A')}",
                 f"Class log-priors: {nb_info.get('class_log_priors', 'N/A')}",
             ]
@@ -488,7 +487,7 @@ def main():
     print(f"  MLflow UI: http://localhost:5000")
     print(f"  Model tipi: {nb_info.get('model_type', 'N/A')}")
     print(f"  Smoothing: {nb_info.get('smoothing', 'N/A')}")
-    print(f"  MinMaxScaler kullanıldı: {'Evet' if used_scaler else 'Hayır'}")
+    print(f"  MinMaxScaler kullanıldı: Evet (Pipeline içinde)")
     print(f"  CV en iyi AUC: {cv_results['best_score']:.4f}")
     print(f"  AUC-ROC (test): {metrics.get('auc_roc', 0):.4f}")
     print(f"  Accuracy: {metrics.get('accuracy', 0):.4f}")

@@ -193,8 +193,21 @@ def split_data(
     Returns:
         (train_df, test_df): Eğitim ve test DataFrame'leri
     """
-    test_ratio = 1.0 - train_ratio
-    train_df, test_df = df.randomSplit([train_ratio, test_ratio], seed=seed)
+    if stratified:
+        df_with_id = df.withColumn("_row_id", F.monotonically_increasing_id())
+        fractions = {
+            row["label"]: train_ratio
+            for row in df_with_id.select("label").distinct().collect()
+        }
+        train_df = df_with_id.sampleBy("label", fractions=fractions, seed=seed)
+        test_df = df_with_id.join(
+            train_df.select("_row_id"), on="_row_id", how="left_anti"
+        )
+        train_df = train_df.drop("_row_id")
+        test_df = test_df.drop("_row_id")
+    else:
+        test_ratio = 1.0 - train_ratio
+        train_df, test_df = df.randomSplit([train_ratio, test_ratio], seed=seed)
 
     if log_stats:
         train_count = train_df.count()
