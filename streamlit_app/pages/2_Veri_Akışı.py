@@ -42,9 +42,11 @@ with st.sidebar:
 
 if auto_refresh:
     _refresh_count = st_autorefresh(interval=refresh_sec * 1000, key="live_refresh_ctr")
-    # Her autorefresh döngüsünde kısa-TTL cache'leri temizle — stale veri gösterilmesini önler
     get_kafka_topic_offsets.clear()
     get_layer_freshness.clear()
+    # Her 30 yenilemede layer_stats'ı da temizle → zaman serisi gerçek zamanlı güncellenir
+    if _refresh_count % 30 == 0:
+        get_layer_stats.clear()
 
 st.markdown("# 🌊 Veri Akışı")
 st.markdown(
@@ -52,6 +54,15 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.markdown("---")
+
+# layer_df erken fetch — hem Canlı İzleme hem Animasyon hem de Katman Detayları kullanır
+layer_df = get_layer_stats()
+_layer_rows: dict = {}
+for _, _lr in layer_df.iterrows():
+    try:
+        _layer_rows[_lr["layer"]] = int(_lr["rows"])
+    except (TypeError, ValueError):
+        _layer_rows[_lr["layer"]] = 0
 
 # ── Canlı İzleme ─────────────────────────────────────────────────────────────────────────────
 section("🟥 Canlı İzleme", "Producer ve streaming pipeline'in anlık durumu")
@@ -106,13 +117,17 @@ with c_layers:
         active = fi.get("active", False)
         last_mod = fi.get("last_modified") or "—"
         age_sec = fi.get("age_sec")
+        has_data = _layer_rows.get(lname, 0) > 0
         if not exists:
             dot, dot_color, status_lbl, age_str = "⚫", "#64748B", "Henüz oluşturulmadı", "—"
         elif active:
             dot, dot_color, status_lbl = "🟢", "#10B981", "Aktif — yazıyor"
             age_str = f"{age_sec}s önce" if age_sec is not None else "—"
+        elif has_data:
+            dot, dot_color, status_lbl = "🔵", "#3B82F6", "Tamamlandı"
+            age_str = f"{age_sec}s önce" if age_sec is not None else "—"
         else:
-            dot, dot_color, status_lbl = "🟡", "#F59E0B", "Bekliyor"
+            dot, dot_color, status_lbl = "🟡", "#F59E0B", "Bekliyor — veri yok"
             age_str = f"{age_sec}s önce" if age_sec is not None else "—"
         rows_html += f"""
         <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;
@@ -158,9 +173,184 @@ pipeline_diagram([
     {"icon": "✨", "title": "Gold", "desc": "ML-ready"},
 ])
 
-# ── Katman detayları ─────────────────────────────────────────────────────────
-layer_df = get_layer_stats()
+# ── Canlı Akış Animasyonu ─────────────────────────────────────────────────────
+st.markdown("---")
+section("🎬 Canlı Akış Animasyonu", "Kafka → Bronze → Silver → Gold gerçek zamanlı veri hareketi")
 
+_b_active = freshness.get("Bronze", {}).get("active", False)
+_s_active = freshness.get("Silver", {}).get("active", False)
+_g_active = freshness.get("Gold", {}).get("active", False)
+_k_ok     = kstats.get("status") == "ok"
+
+# Tüm değerleri önce düz Python değişkenlerine at — f-string içinde iç içe
+# quote ve koşul olmadığı için her Python sürümünde güvenle çalışır.
+
+def _make_dots(color, active, count=3):
+    if not active:
+        return ""
+    step = 1.2 / count
+    parts = []
+    for i in range(count):
+        parts.append(
+            '<div class="anim-dot" style="background:' + color + ';'
+            'animation-duration:1.2s;animation-delay:' + f"{i * step:.2f}" + 's"></div>'
+        )
+    return "".join(parts)
+
+# Kafka
+_k_op    = "1"      if _k_ok     else "0.4"
+_k_sc    = "#10B981" if _k_ok    else "#EF4444"
+_k_st    = "&#9679; Aktif"       if _k_ok     else "&#9679; Kapalı"
+_k_anim  = "animation:glow-pulse 1.4s ease-in-out infinite;--glow:rgba(99,102,241,0.65);" if _k_ok else ""
+_k_pbg   = "rgba(205,127,50,0.45)"  if _k_ok     else "rgba(205,127,50,0.12)"
+_k_dots  = _make_dots("#E8964A", _k_ok)
+
+# Bronze
+_b_done  = (not _b_active) and _layer_rows.get("Bronze", 0) > 0
+_b_op    = "1"       if (_b_active or _b_done) else "0.4"
+_b_sc    = "#10B981" if _b_active else ("#3B82F6" if _b_done else "#64748B")
+_b_st    = "&#9679; Yazıyor" if _b_active else ("&#10003; Tamamland&#305;" if _b_done else "&#9675; Bekliyor")
+_b_anim  = "animation:glow-pulse 1.4s ease-in-out infinite;--glow:rgba(205,127,50,0.65);" if _b_active else ""
+_b_pbg   = "rgba(192,192,192,0.45)" if _b_active else "rgba(192,192,192,0.12)"
+_b_dots  = _make_dots("#C0C0C0", _b_active)
+
+# Silver
+_s_done  = (not _s_active) and _layer_rows.get("Silver", 0) > 0
+_s_op    = "1"       if (_s_active or _s_done) else "0.4"
+_s_sc    = "#10B981" if _s_active else ("#3B82F6" if _s_done else "#64748B")
+_s_st    = "&#9679; Yazıyor" if _s_active else ("&#10003; Tamamland&#305;" if _s_done else "&#9675; Bekliyor")
+_s_anim  = "animation:glow-pulse 1.4s ease-in-out infinite;--glow:rgba(192,192,192,0.65);" if _s_active else ""
+_s_pbg   = "rgba(255,215,0,0.45)"   if _s_active else "rgba(255,215,0,0.12)"
+_s_dots  = _make_dots("#FFD700", _s_active)
+
+# Gold
+_g_done  = (not _g_active) and _layer_rows.get("Gold", 0) > 0
+_g_op    = "1"       if (_g_active or _g_done) else "0.4"
+_g_sc    = "#10B981" if _g_active else ("#3B82F6" if _g_done else "#64748B")
+_g_st    = "&#9679; Yazıyor" if _g_active else ("&#10003; Tamamland&#305;" if _g_done else "&#9675; Bekliyor")
+_g_anim  = "animation:glow-pulse 1.4s ease-in-out infinite;--glow:rgba(255,215,0,0.65);"  if _g_active else ""
+
+_anim_html = (
+    "<style>"
+    "@keyframes particle-flow{"
+    "0%{left:-10px;opacity:0}"
+    "15%{opacity:1}"
+    "85%{opacity:1}"
+    "100%{left:calc(100% + 10px);opacity:0}"
+    "}"
+    "@keyframes glow-pulse{"
+    "0%,100%{box-shadow:0 0 4px 2px var(--glow,rgba(255,255,255,0.2))}"
+    "50%{box-shadow:0 0 18px 7px var(--glow,rgba(255,255,255,0.2))}"
+    "}"
+    ".af-wrap{display:flex;align-items:center;padding:28px 16px;"
+    "background:rgba(15,23,42,0.55);border-radius:16px;"
+    "border:1px solid rgba(99,102,241,0.18)}"
+    ".af-box{display:flex;flex-direction:column;align-items:center;"
+    "justify-content:center;width:118px;height:100px;border-radius:14px;"
+    "font-weight:700;font-size:0.82rem;flex-shrink:0;position:relative;z-index:2}"
+    ".af-pipe{position:relative;flex:1;height:6px;border-radius:3px;"
+    "overflow:visible;margin:0 -1px}"
+    ".af-dot{position:absolute;top:50%;transform:translateY(-50%);"
+    "width:10px;height:10px;border-radius:50%;"
+    "animation:particle-flow linear infinite}"
+    "</style>"
+    # ── Kafka ──
+    '<div class="af-wrap">'
+    '<div class="af-box" style="background:rgba(99,102,241,0.12);'
+    "border:2px solid #6366F1;opacity:" + _k_op + ";color:#A5B4FC;" + _k_anim + '">'
+    '<div style="font-size:1.8rem">&#128225;</div>'
+    '<div style="margin-top:4px">Kafka</div>'
+    '<div style="font-size:0.65rem;color:' + _k_sc + ';margin-top:3px">' + _k_st + '</div>'
+    "</div>"
+    # ── Kafka→Bronze pipe ──
+    '<div class="af-pipe" style="background:' + _k_pbg + '">' + _k_dots + "</div>"
+    # ── Bronze ──
+    '<div class="af-box" style="background:rgba(205,127,50,0.12);'
+    "border:2px solid #CD7F32;opacity:" + _b_op + ";color:#D4904E;" + _b_anim + '">'
+    '<div style="font-size:1.8rem">&#129379;</div>'
+    '<div style="margin-top:4px">Bronze</div>'
+    '<div style="font-size:0.65rem;color:' + _b_sc + ';margin-top:3px">' + _b_st + '</div>'
+    "</div>"
+    # ── Bronze→Silver pipe ──
+    '<div class="af-pipe" style="background:' + _b_pbg + '">' + _b_dots + "</div>"
+    # ── Silver ──
+    '<div class="af-box" style="background:rgba(192,192,192,0.08);'
+    "border:2px solid #C0C0C0;opacity:" + _s_op + ";color:#C0C0C0;" + _s_anim + '">'
+    '<div style="font-size:1.8rem">&#129529;</div>'
+    '<div style="margin-top:4px">Silver</div>'
+    '<div style="font-size:0.65rem;color:' + _s_sc + ';margin-top:3px">' + _s_st + '</div>'
+    "</div>"
+    # ── Silver→Gold pipe ──
+    '<div class="af-pipe" style="background:' + _s_pbg + '">' + _s_dots + "</div>"
+    # ── Gold ──
+    '<div class="af-box" style="background:rgba(255,215,0,0.08);'
+    "border:2px solid #FFD700;opacity:" + _g_op + ";color:#FFD700;" + _g_anim + '">'
+    '<div style="font-size:1.8rem">&#10024;</div>'
+    '<div style="margin-top:4px">Gold</div>'
+    '<div style="font-size:0.65rem;color:' + _g_sc + ';margin-top:3px">' + _g_st + '</div>'
+    "</div>"
+    "</div>"
+)
+
+st.markdown(_anim_html, unsafe_allow_html=True)
+
+# ── Canlı Zaman Serisi ────────────────────────────────────────────────────────
+_MAX_HIST = 120
+
+if "flow_history" not in st.session_state:
+    st.session_state.flow_history = []
+
+_b = layer_df[layer_df["layer"] == "Bronze"]["rows"].values[0] if not layer_df.empty else None
+_s = layer_df[layer_df["layer"] == "Silver"]["rows"].values[0] if not layer_df.empty else None
+_g = layer_df[layer_df["layer"] == "Gold"]["rows"].values[0] if not layer_df.empty else None
+
+if any(v is not None for v in [_b, _s, _g]):
+    st.session_state.flow_history.append(
+        {"ts": datetime.now(), "bronze": _b, "silver": _s, "gold": _g}
+    )
+    if len(st.session_state.flow_history) > _MAX_HIST:
+        st.session_state.flow_history = st.session_state.flow_history[-_MAX_HIST:]
+
+if len(st.session_state.flow_history) >= 1:
+    _hist  = st.session_state.flow_history
+    _times = [h["ts"] for h in _hist]
+    _ts_fig = go.Figure()
+    for _lname, _color, _fill in [
+        ("bronze", "#CD7F32", "rgba(205,127,50,0.10)"),
+        ("silver", "#C0C0C0", "rgba(192,192,192,0.10)"),
+        ("gold",   "#FFD700", "rgba(255,215,0,0.10)"),
+    ]:
+        _ts_fig.add_trace(go.Scatter(
+            x=_times,
+            y=[h.get(_lname) for h in _hist],
+            mode="lines",
+            name=_lname.capitalize(),
+            line=dict(color=_color, width=2),
+            fill="tozeroy",
+            fillcolor=_fill,
+        ))
+    _ts_fig.update_layout(
+        height=260,
+        margin=dict(l=0, r=0, t=10, b=0),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(15,23,42,0.5)",
+        legend=dict(orientation="h", y=1.08, x=0, font=dict(color="#94A3B8")),
+        xaxis=dict(showgrid=False, color="#64748B", tickfont=dict(color="#64748B")),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor="rgba(100,116,139,0.15)",
+            color="#64748B",
+            tickfont=dict(color="#64748B"),
+            title=dict(text="Satır sayısı", font=dict(color="#64748B")),
+        ),
+    )
+    st.plotly_chart(_ts_fig, use_container_width=True)
+else:
+    st.caption("Zaman serisi için en az 2 veri noktası bekleniyor…")
+
+st.markdown("---")
+
+# ── Katman detayları ─────────────────────────────────────────────────────────
 section("📦 Katman Detayları", "Her katmanın rolü ve mevcut durumu")
 
 layer_meta = {
