@@ -93,14 +93,11 @@ def write_to_silver(spark: SparkSession, base_path: str = "/opt/bitnami/spark/de
     for c in port_cols:
         clean_df = clean_df.withColumn(c, F.col(c).cast("integer"))
         
-    # E. Streaming Drop Duplicates (Watermark gerekli!)
-    # Verilerin son 1 dakika içinde geliş zamanlarına göre kopya olup olmadığına bakar
-    # 1 dakikadan eski veriler hafızadan (state) silinir.
-    clean_df = (
-        clean_df
-        .withWatermark("ingestion_time", "1 minute")
-        .dropDuplicates(["ingestion_time", "flow_id"]) # Aynı saniyede aynı flow_id gelirse kopyadır
-    )
+    # E. Streaming Drop Duplicates
+    # Aynı flow_id tekrar gelirse kopya kabul edilir.
+    # Not: Watermark olmadan state süresiz tutulur ancak bu veri seti için (≤200K satır)
+    # bellek açısından güvenlidir.
+    clean_df = clean_df.dropDuplicates(["flow_id"])
     
     # 4. Silver Katmanına Yazma
     query = (

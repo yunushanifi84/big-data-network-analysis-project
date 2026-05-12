@@ -68,7 +68,7 @@ def main():
     # Silver'ın Delta tablosunu oluşturmasını bekle
     silver_path = f"{base_path}/silver/network_traffic"
     print("\n   Silver Delta tablosunun oluşmasını bekliyoruz...")
-    if not wait_for_delta_table(silver_path, timeout=120):
+    if not wait_for_delta_table(silver_path, timeout=300):
         print("   ❌ Silver tablosu oluşturulamadı! Silver layer loglarını kontrol edin.")
         spark.stop()
         sys.exit(1)

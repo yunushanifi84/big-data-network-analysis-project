@@ -1,5 +1,6 @@
 """Genel Bakış sayfası — proje hikâyesi + mimari + üst düzey metrikler."""
 import streamlit as st
+import pandas as pd
 
 st.set_page_config(page_title="Genel Bakış", page_icon="📊", layout="wide")
 
@@ -69,8 +70,14 @@ if not layer_df.empty:
     icons = {"Bronze": "🪣", "Silver": "🧹", "Gold": "✨"}
     for idx, (_, row) in enumerate(layer_df.iterrows()):
         with cols[idx]:
-            rows_v = f"{int(row['rows']):,}" if row["rows"] is not None else "—"
-            cols_v = str(int(row["columns"])) if row["columns"] is not None else "—"
+            try:
+                rows_v = f"{int(row['rows']):,}"
+            except (ValueError, TypeError):
+                rows_v = "—"
+            try:
+                cols_v = str(int(row["columns"]))
+            except (ValueError, TypeError):
+                cols_v = "—"
             st.markdown(
                 f"""
                 <div class="info-card">

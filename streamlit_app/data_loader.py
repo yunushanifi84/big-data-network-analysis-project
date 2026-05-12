@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -25,6 +27,8 @@ DEFAULT_RAW_DATA = REPO_ROOT / "data" / "raw"
 MLFLOW_DB = Path(os.environ.get("MLFLOW_DB", DEFAULT_MLFLOW_DB))
 DELTA_ROOT = Path(os.environ.get("DELTA_ROOT", DEFAULT_DELTA_ROOT))
 ML_DIR = Path(os.environ.get("ML_DIR", DEFAULT_ML_DIR))
+KAFKA_BROKERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092").split(",")
+KAFKA_TOPIC = os.environ.get("KAFKA_TOPIC", "iot-network-traffic")
 
 
 # ── Tüm 5 Model için Ortak Tanım ─────────────────────────────────────────────
@@ -269,7 +273,7 @@ def get_layer_stats() -> pd.DataFrame:
     layers = [
         ("Bronze", DELTA_ROOT / "bronze" / "network_traffic", "Kafka ham JSON"),
         ("Silver", DELTA_ROOT / "silver" / "network_traffic", "Parse + temizlik"),
-        ("Gold", DELTA_ROOT / "gold" / "ml_ready_compact", "ML hazır + 5 yeni feature"),
+        ("Gold", DELTA_ROOT / "gold" / "ml_ready", "ML hazır + 5 yeni feature"),
     ]
     rows = []
     for name, path, desc in layers:
@@ -296,6 +300,69 @@ def get_layer_stats() -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=8)
+def get_kafka_topic_offsets() -> dict:
+    """Kafka topic'teki toplam mesaj sayısı ve broker bağlantı durumu."""
+    try:
+        from kafka import KafkaConsumer, TopicPartition  # noqa: PLC0415
+
+        consumer = KafkaConsumer(
+            bootstrap_servers=KAFKA_BROKERS,
+            consumer_timeout_ms=3000,
+            request_timeout_ms=5000,
+            connections_max_idle_ms=6000,
+        )
+        partitions_set = consumer.partitions_for_topic(KAFKA_TOPIC)
+        if not partitions_set:
+            consumer.close()
+            return {"status": "no_topic", "total_messages": 0, "partitions": 0, "topic": KAFKA_TOPIC}
+
+        tps = [TopicPartition(KAFKA_TOPIC, p) for p in partitions_set]
+        end_offsets = consumer.end_offsets(tps)
+        consumer.close()
+
+        total = sum(end_offsets[tp] for tp in tps)
+        return {
+            "status": "ok",
+            "total_messages": total,
+            "partitions": len(partitions_set),
+            "topic": KAFKA_TOPIC,
+        }
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)[:120], "total_messages": 0, "partitions": 0}
+
+
+@st.cache_data(ttl=10)
+def get_layer_freshness() -> Dict[str, dict]:
+    """Bronze/Silver/Gold katmanlarının son değişiklik zamanını döner."""
+    result: Dict[str, dict] = {}
+    now = time.time()
+    layers = {
+        "Bronze": DELTA_ROOT / "bronze" / "network_traffic",
+        "Silver": DELTA_ROOT / "silver" / "network_traffic",
+        "Gold":   DELTA_ROOT / "gold" / "ml_ready",
+    }
+    for name, path in layers.items():
+        if not path.exists():
+            result[name] = {"active": False, "last_modified": None, "age_sec": None, "exists": False}
+            continue
+        latest_mtime = max(
+            (p.stat().st_mtime for p in path.rglob("*") if p.is_file()),
+            default=0.0,
+        )
+        if latest_mtime == 0.0:
+            result[name] = {"active": False, "last_modified": None, "age_sec": None, "exists": True}
+            continue
+        age_sec = now - latest_mtime
+        result[name] = {
+            "active": age_sec < 120,
+            "last_modified": datetime.fromtimestamp(latest_mtime).strftime("%H:%M:%S"),
+            "age_sec": round(age_sec),
+            "exists": True,
+        }
+    return result
 
 
 @st.cache_data(ttl=300)
