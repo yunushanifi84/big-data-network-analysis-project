@@ -74,6 +74,22 @@ kaggle datasets download -d mohamedamineferrag/edgeiiotset-cyber-security-datase
 
 ---
 
+## ⚙️ Feature Engineering (5 Türetilmiş Özellik)
+
+Gold katmanında saldırı tespitini güçlendirmek için **5 yeni feature** üretilmektedir. Her bir feature, IoT ağ trafiğindeki belirli saldırı kalıplarını yakalamak üzere alan bilgisine (domain knowledge) dayalı olarak tasarlanmıştır.
+
+> Kaynak modül: `spark/preprocessing/feature_engineering.py` · Dashboard: Streamlit → Feature Engineering sayfası
+
+| # | Feature | Formül | Neden Seçildi? | Hedef Saldırılar |
+|---|---|---|---|---|
+| 1 | **traffic_asymmetry_ratio** | `tcp_ack / (tcp_seq + 1)` | Normal trafik simetrik ACK/SEQ akışına sahiptir; DDoS saldırılarında SYN flood nedeniyle bu oran bozulur | DDoS TCP/UDP/ICMP Flood, SYN Flood |
+| 2 | **pkt_size_cv** | `tcp_len / (\|tcp_seq - tcp_ack\| + 1)` | Port tarama saldırıları küçük paketlerle çok sayıda bağlantı açar, bu da paket boyutu / bağlantı durumu oranını bozar | Port Scanning, Vulnerability Scanner |
+| 3 | **flow_intensity** | `tcp_len × tcp_flags` | Paket boyutu ve flag sayısını tek metrikte birleştirir; volumetrik saldırılarda her iki değer de anormal olur | DDoS UDP/ICMP Flood, HTTP Flood |
+| 4 | **iat_regularity** | `tcp_checksum / (tcp_len + 1)` | Saldırı araçları crafted paketler üretir — küçük payload ile yüksek header overhead, checksum/len oranını anormal yapar | Port Scanning, Password Brute Force |
+| 5 | **conn_efficiency** | `tcp_syn / (tcp_fin + tcp_rst + 1)` | Normal TCP'de SYN/FIN oranı ~1'dir; keşif saldırıları çok SYN gönderir ama bağlantıyı tamamlamaz, oran yükselir | Port Scanning, OS Fingerprinting |
+
+---
+
 ## 🔄 Streaming Pipeline Çalıştırma
 
 Tüm Docker servisleri ayakta olduktan sonra (`docker compose up -d`), aşağıdaki adımları sırasıyla uygulayın:
