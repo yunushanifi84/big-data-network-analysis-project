@@ -92,27 +92,23 @@ class FeatureEngineer:
     # ──────────────────────────────────────────────
     def add_pkt_size_cv(self) -> "FeatureEngineer":
         """
-        pkt_size_cv = |tcp_len - tcp_payload| / (tcp_len + 1)
+        pkt_size_cv = tcp_len / (|tcp_seq - tcp_ack| + 1)
 
         NEDEN?
-        Normal trafik tutarlı paket boyutlarına sahiptir (düşük varyasyon).
-        Port Scanning ve Vulnerability Scanner saldırıları ise farklı
-        boyutlarda paketler gönderir (yüksek varyasyon). Bu coefficient of
-        variation (CV) değeri bu farkı yakalar.
+        Normal trafik tutarlı paket boyutlarına sahiptir — paket boyutu (tcp_len)
+        ve bağlantı durumu (seq-ack farkı) arasında beklenen bir oran vardır.
+        Port Scanning ve Vulnerability Scanner saldırıları ise küçük paketlerle
+        çok sayıda bağlantı açar, bu da oranı bozar.
 
         TESPIT ETTİĞİ SALDIRILAR: Port Scanning, Vulnerability Scanner, OS Fingerprinting
         """
-        # tcp_len ve tcp_payload arasındaki fark paket header overhead'ini gösterir
-        if "tcp_len" in self.df.columns and "tcp_payload" in self.df.columns:
+        if "tcp_len" in self.df.columns and "tcp_seq" in self.df.columns and "tcp_ack" in self.df.columns:
             self.df = self.df.withColumn(
                 "pkt_size_cv",
-                F.abs(F.col("tcp_len") - F.col("tcp_payload")) / (F.col("tcp_len") + F.lit(1))
+                F.col("tcp_len") / (F.abs(F.col("tcp_seq") - F.col("tcp_ack")) + F.lit(1.0))
             )
         elif "tcp_len" in self.df.columns:
-            self.df = self.df.withColumn(
-                "pkt_size_cv",
-                F.col("tcp_len") / (F.col("tcp_checksum") + F.lit(1))
-            )
+            self.df = self.df.withColumn("pkt_size_cv", F.col("tcp_len").cast("double"))
         else:
             self.df = self.df.withColumn("pkt_size_cv", F.lit(0.0))
 
@@ -178,23 +174,30 @@ class FeatureEngineer:
     # ──────────────────────────────────────────────
     def add_iat_regularity(self) -> "FeatureEngineer":
         """
-        iat_regularity = udp_time_delta / (frame_time + 1)
+        iat_regularity = tcp_checksum / (tcp_len + 1)
 
         NEDEN?
-        Otomatize edilmiş saldırı araçları (botnet, scanner) paketleri çok
-        düzenli aralıklarla gönderir — sürekli aynı time_delta. İnsan
-        kaynaklı normal trafik ise düzensiz aralıklara sahiptir. Bu oran
-        düzenli gönderim yapan bot'ları tespit eder.
+        TCP checksum paket header'ı ve payload'un bütünlük kontrolüdür.
+        Normal trafik tutarlı checksum/boyut oranına sahiptir.
+        Saldırı araçları (scanner, brute force) crafted paketler üretir —
+        küçük payload ile yüksek header overhead, bu da checksum/len
+        oranını anormal yapar. Port Scanning küçük paketler gönderir
+        (yüksek oran), DDoS büyük payload kullanır (düşük oran).
 
-        TESPIT ETTİĞİ SALDIRILAR: Botnet, Automated Scanning, Password Brute Force
+        TESPIT ETTİĞİ SALDIRILAR: Port Scanning, Automated Scanning, Password Brute Force
         """
-        delta_col = "udp_time_delta" if "udp_time_delta" in self.df.columns else None
-        time_col = "frame_time" if "frame_time" in self.df.columns else None
-
-        if delta_col and time_col:
+        if "tcp_checksum" in self.df.columns and "tcp_len" in self.df.columns:
+            # Checksum / paket boyutu oranı
+            # Küçük paket + yüksek checksum = tarama/keşif trafiği
+            # Büyük paket + orantılı checksum = normal veri transferi
             self.df = self.df.withColumn(
                 "iat_regularity",
-                F.col(delta_col) / (F.col(time_col) + F.lit(1))
+                F.col("tcp_checksum") / (F.col("tcp_len") + F.lit(1.0))
+            )
+        elif "tcp_checksum" in self.df.columns:
+            self.df = self.df.withColumn(
+                "iat_regularity",
+                F.col("tcp_checksum")
             )
         else:
             self.df = self.df.withColumn("iat_regularity", F.lit(0.0))

@@ -119,39 +119,50 @@ else:
     st.success("Eksik değer yok — Gold katmanı temiz ✨")
 
 # ── Sayısal dağılımlar ──────────────────────────────────────────────────────
-section("📊 Sayısal Feature Dağılımları", "Türetilmiş 5 özelliğin yoğunluk dağılımı")
+section("📊 Sayısal Feature Dağılımları", "Saldırı tipine göre türetilmiş 5 özellik")
 ENG = ["traffic_asymmetry_ratio", "pkt_size_cv", "flow_intensity", "iat_regularity", "conn_efficiency"]
 ENG = [c for c in ENG if c in df.columns]
 
-def _clean_for_hist(series: pd.Series) -> pd.Series:
-    """Inf/NaN temizle, IQR tabanlı outlier kırp."""
-    s = pd.to_numeric(series, errors="coerce")
-    s = s.replace([np.inf, -np.inf], np.nan).dropna()
-    if s.empty:
-        return s
-    q1, q3 = s.quantile(0.01), s.quantile(0.99)
-    iqr = q3 - q1
-    if iqr == 0:
-        iqr = max(abs(q3), 1)
-    lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
-    return s[(s >= lower) & (s <= upper)]
+# Skew olan feature'larda log1p, tüm veri için aykırı kırpma
+_USE_LOG = {"traffic_asymmetry_ratio", "pkt_size_cv", "flow_intensity"}
 
-if ENG:
-    colors = [PALETTE["primary"]] * 3 + [PALETTE["secondary"]] * 2
+if ENG and "Attack_type" in df.columns:
+    # Büyük veriyi küçült — violin plot için 30K yeterli
+    sample = df[ENG + ["Attack_type"]].copy()
+    if len(sample) > 30_000:
+        sample = sample.sample(n=30_000, random_state=42)
+    # Aşırı büyük / Inf temizle
+    for col in ENG:
+        sample[col] = pd.to_numeric(sample[col], errors="coerce")
+        sample[col] = sample[col].replace([np.inf, -np.inf], np.nan)
+        sample.loc[sample[col].abs() > 1e12, col] = np.nan
+    # En çok 6 saldırı tipi göster (grafik okunabilirliği)
+    top_attacks = sample["Attack_type"].value_counts().head(6).index.tolist()
+    sample = sample[sample["Attack_type"].isin(top_attacks)]
     for row_start in range(0, len(ENG), 3):
         row_feats = ENG[row_start:row_start + 3]
         row_cols = st.columns(len(row_feats))
         for i, col in enumerate(row_feats):
             with row_cols[i]:
-                data = _clean_for_hist(df[col])
-                if data.empty:
-                    st.info(f"{col}: tüm değerler Inf/NaN")
+                plot_df = sample[[col, "Attack_type"]].dropna()
+                if plot_df.empty:
+                    st.info(f"{col}: veri yok")
                     continue
-                fig = px.histogram(
-                    data, nbins=50, labels={"value": col},
-                    color_discrete_sequence=[colors[row_start + i]],
+                # Percentile kırp
+                lo, hi = plot_df[col].quantile(0.02), plot_df[col].quantile(0.98)
+                plot_df = plot_df[(plot_df[col] >= lo) & (plot_df[col] <= hi)]
+                y_label = col
+                if col in _USE_LOG:
+                    plot_df[col] = np.log1p(plot_df[col].clip(lower=0))
+                    y_label = f"log₁ₚ({col})"
+                fig = px.box(
+                    plot_df, x="Attack_type", y=col,
+                    color="Attack_type",
+                    color_discrete_sequence=ATTACK_COLORS,
+                    labels={"Attack_type": "", col: y_label},
                 )
-                fig.update_layout(height=260, showlegend=False, title=col)
+                fig.update_layout(height=320, showlegend=False, title=col,
+                                  xaxis_tickangle=-35, margin=dict(b=60))
                 st.plotly_chart(fig, use_container_width=True)
 
 # ── Korelasyon ──────────────────────────────────────────────────────────────
@@ -159,7 +170,9 @@ section("🔥 Korelasyon Isı Haritası", "Türetilmiş özellikler + üst önem
 focus_cols = ENG + [c for c in ("tcp_dstport", "tcp_srcport", "tcp_seq", "tcp_ack", "tcp_flags", "tcp_len") if c in df.columns]
 focus_cols = [c for c in focus_cols if c in df.columns]
 if len(focus_cols) >= 2:
-    corr_df = df[focus_cols].replace([np.inf, -np.inf], np.nan)
+    corr_df = df[focus_cols].apply(pd.to_numeric, errors="coerce")
+    corr_df = corr_df.replace([np.inf, -np.inf], np.nan)
+    corr_df[corr_df.abs() > 1e15] = np.nan
     corr = corr_df.corr().round(2)
     fig = px.imshow(
         corr, text_auto=True, aspect="auto",

@@ -55,6 +55,23 @@ def kafka_consumer_thread():
                 stats["kafka_connected"] = True
             from kafka import TopicPartition
             batch, last_check, offset_check = 0, time.time(), 0
+
+            # İlk bağlantıda hemen gerçek toplam mesaj sayısını al
+            def _update_topic_total():
+                try:
+                    parts = consumer.partitions_for_topic("iot-network-traffic")
+                    if parts:
+                        tps = [TopicPartition("iot-network-traffic", p) for p in parts]
+                        begins = consumer.beginning_offsets(tps)
+                        ends = consumer.end_offsets(tps)
+                        total = sum(ends[t] - begins[t] for t in tps)
+                        with _lock:
+                            stats["topic_total"] = total
+                except Exception:
+                    pass
+
+            _update_topic_total()  # İlk ölçüm — bekleme yok
+
             while True:
                 for tp, msgs in consumer.poll(timeout_ms=500).items():
                     for msg in msgs:
@@ -77,18 +94,9 @@ def kafka_consumer_thread():
                         _rate_window.append(batch)
                         stats["msg_rate"] = sum(_rate_window) // max(len(_rate_window), 1)
                     batch, last_check = 0, now
-                # Her 5s topic end offset sorgula (gerçek toplam)
+                # Her 5s gerçek toplam mesaj sayısını güncelle
                 if now - offset_check >= 5.0:
-                    try:
-                        parts = consumer.partitions_for_topic("iot-network-traffic")
-                        if parts:
-                            tps = [TopicPartition("iot-network-traffic", p) for p in parts]
-                            ends = consumer.end_offsets(tps)
-                            total = sum(ends[t] for t in tps)
-                            with _lock:
-                                stats["topic_total"] = total
-                    except Exception:
-                        pass
+                    _update_topic_total()
                     offset_check = now
         except Exception as exc:
             with _lock:
