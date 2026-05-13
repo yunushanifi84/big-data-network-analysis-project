@@ -366,14 +366,14 @@ def get_layer_freshness() -> Dict[str, dict]:
 
 
 @st.cache_data(ttl=60)
-def load_gold_sample(limit: int = 50_000) -> pd.DataFrame:
-    """Gold tablosundan örnek satır seti. Cache'lendiği için tek seferlik maliyet."""
+def load_gold_sample(limit: int = 0) -> pd.DataFrame:
+    """Gold tablosundan veri. limit>0 ise örnekler, yoksa tüm tablo."""
     df = _try_read_delta(DELTA_ROOT / "gold" / "ml_ready_compact")
     if df is None:
         df = _try_read_delta(DELTA_ROOT / "gold" / "ml_ready")
     if df is None:
         return pd.DataFrame()
-    if len(df) > limit:
+    if limit > 0 and len(df) > limit:
         df = df.sample(n=limit, random_state=42).reset_index(drop=True)
     return df
 

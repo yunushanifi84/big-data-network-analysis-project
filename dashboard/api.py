@@ -27,6 +27,7 @@ LAYER_PATHS = {
 # ── Kafka consumer state ───────────────────────────────────────────────────────
 stats = {
     "kafka_count": 0,
+    "topic_total": 0,
     "msg_rate":    0,
     "kafka_connected": False,
     "attack_counts": {},
@@ -52,7 +53,8 @@ def kafka_consumer_thread():
             print("[API] Kafka bağlantısı kuruldu.", flush=True)
             with _lock:
                 stats["kafka_connected"] = True
-            batch, last_check = 0, time.time()
+            from kafka import TopicPartition
+            batch, last_check, offset_check = 0, time.time(), 0
             while True:
                 for tp, msgs in consumer.poll(timeout_ms=500).items():
                     for msg in msgs:
@@ -75,6 +77,19 @@ def kafka_consumer_thread():
                         _rate_window.append(batch)
                         stats["msg_rate"] = sum(_rate_window) // max(len(_rate_window), 1)
                     batch, last_check = 0, now
+                # Her 5s topic end offset sorgula (gerçek toplam)
+                if now - offset_check >= 5.0:
+                    try:
+                        parts = consumer.partitions_for_topic("iot-network-traffic")
+                        if parts:
+                            tps = [TopicPartition("iot-network-traffic", p) for p in parts]
+                            ends = consumer.end_offsets(tps)
+                            total = sum(ends[t] for t in tps)
+                            with _lock:
+                                stats["topic_total"] = total
+                    except Exception:
+                        pass
+                    offset_check = now
         except Exception as exc:
             with _lock:
                 stats["kafka_connected"] = False
@@ -151,7 +166,7 @@ def stream_sse():
                     connected = stats["kafka_connected"]
                     kafka = {
                         "status": "ok" if connected else "waiting",
-                        "total":  stats["kafka_count"],
+                        "total":  stats["topic_total"] or stats["kafka_count"],
                         "rate":   stats["msg_rate"],
                         "connected": connected,
                     }

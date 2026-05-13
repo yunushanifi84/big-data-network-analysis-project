@@ -1,6 +1,7 @@
 """Keşifsel Veri Analizi (EDA) sayfası."""
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
@@ -23,7 +24,7 @@ st.markdown(
 )
 st.markdown("---")
 
-df = load_gold_sample(limit=80_000)
+df = load_gold_sample()
 if df.empty:
     st.warning("Gold tablosu boş — önce streaming pipeline'ını çalıştırın.")
     st.stop()
@@ -31,7 +32,7 @@ if df.empty:
 # ── Üst KPI'lar ──────────────────────────────────────────────────────────────
 k1, k2, k3, k4 = st.columns(4)
 with k1:
-    st.metric("Örneklenen satır", f"{len(df):,}")
+    st.metric("Toplam satır", f"{len(df):,}")
 with k2:
     st.metric("Toplam kolon", f"{df.shape[1]}")
 with k3:
@@ -78,38 +79,24 @@ if "Attack_type" in df.columns:
         st.plotly_chart(fig2, use_container_width=True)
 
 # ── Zaman serisi ─────────────────────────────────────────────────────────────
-section("📈 Zaman Serisi Trendi", "Saatlik mesaj hacmi")
+section("📈 Zaman Serisi Trendi", "Kayıt sırasına göre saldırı dağılımı")
 
-ts_col = None
-for c in ("ingestion_time", "timestamp", "frame_time"):
-    if c in df.columns:
-        ts_col = c
-        break
-
-if ts_col is not None:
-    try:
-        ts = pd.to_datetime(df[ts_col], errors="coerce")
-        valid = ts.notna()
-        if valid.sum() > 100:
-            tdf = pd.DataFrame({
-                "ts": ts[valid],
-                "Attack_type": df.loc[valid, "Attack_type"] if "Attack_type" in df.columns else "all",
-            })
-            tdf["hour"] = tdf["ts"].dt.floor("h")
-            hourly = tdf.groupby("hour").size().reset_index(name="count")
-            fig = px.area(
-                hourly, x="hour", y="count",
-                labels={"hour": "Saat", "count": "Mesaj"},
-            )
-            fig.update_traces(line_color=PALETTE["primary"], fillcolor="rgba(99,102,241,0.25)")
-            fig.update_layout(height=320)
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info(f"{ts_col} sütununda geçerli tarih bulunamadı (parse oranı düşük).")
-    except Exception as e:
-        st.info(f"Zaman serisi oluşturulamadı: {e}")
+if "Attack_type" in df.columns:
+    # Kayıt sırasını zaman proksi olarak kullan (veri tek seferde stream edildiği için
+    # gerçek timestamp'ler birbirine çok yakın — saatlik gruplama anlamsız kalır)
+    window = max(len(df) // 200, 1)
+    tdf = df[["Attack_type"]].copy()
+    tdf["batch"] = (tdf.index // window)
+    batch_counts = tdf.groupby(["batch", "Attack_type"]).size().reset_index(name="count")
+    fig = px.area(
+        batch_counts, x="batch", y="count", color="Attack_type",
+        color_discrete_sequence=ATTACK_COLORS,
+        labels={"batch": "Kayıt grubu", "count": "Mesaj sayısı", "Attack_type": "Saldırı"},
+    )
+    fig.update_layout(height=360, xaxis_title="Kayıt sırası →", legend=dict(orientation="h", y=-0.2))
+    st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("Zaman bilgisi içeren bir kolon bulunamadı.")
+    st.info("Attack_type kolonu bulunamadı.")
 
 # ── Eksik değer analizi ──────────────────────────────────────────────────────
 section("🕳️ Eksik Değer Analizi", "En çok eksik içeren ilk 20 kolon")
@@ -136,30 +123,33 @@ section("📊 Sayısal Feature Dağılımları", "Türetilmiş 5 özelliğin yo�
 ENG = ["traffic_asymmetry_ratio", "pkt_size_cv", "flow_intensity", "iat_regularity", "conn_efficiency"]
 ENG = [c for c in ENG if c in df.columns]
 
+def _clean_for_hist(series: pd.Series) -> pd.Series:
+    """Inf/NaN temizle, IQR tabanlı outlier kırp."""
+    s = pd.to_numeric(series, errors="coerce")
+    s = s.replace([np.inf, -np.inf], np.nan).dropna()
+    if s.empty:
+        return s
+    q1, q3 = s.quantile(0.01), s.quantile(0.99)
+    iqr = q3 - q1
+    if iqr == 0:
+        iqr = max(abs(q3), 1)
+    lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+    return s[(s >= lower) & (s <= upper)]
+
 if ENG:
-    cols = st.columns(min(len(ENG), 3))
-    for i, col in enumerate(ENG[:3]):
-        with cols[i]:
-            data = df[col].dropna()
-            # Aşırı uçları kes (99. percentile)
-            q99 = data.quantile(0.99) if not data.empty else 1
-            data = data[(data >= data.quantile(0.01)) & (data <= q99)]
-            fig = px.histogram(
-                data, nbins=40, labels={"value": col},
-                color_discrete_sequence=[PALETTE["primary"]],
-            )
-            fig.update_layout(height=260, showlegend=False, title=col)
-            st.plotly_chart(fig, use_container_width=True)
-    if len(ENG) > 3:
-        cols2 = st.columns(min(len(ENG) - 3, 3))
-        for i, col in enumerate(ENG[3:]):
-            with cols2[i]:
-                data = df[col].dropna()
-                q99 = data.quantile(0.99) if not data.empty else 1
-                data = data[(data >= data.quantile(0.01)) & (data <= q99)]
+    colors = [PALETTE["primary"]] * 3 + [PALETTE["secondary"]] * 2
+    for row_start in range(0, len(ENG), 3):
+        row_feats = ENG[row_start:row_start + 3]
+        row_cols = st.columns(len(row_feats))
+        for i, col in enumerate(row_feats):
+            with row_cols[i]:
+                data = _clean_for_hist(df[col])
+                if data.empty:
+                    st.info(f"{col}: tüm değerler Inf/NaN")
+                    continue
                 fig = px.histogram(
-                    data, nbins=40, labels={"value": col},
-                    color_discrete_sequence=[PALETTE["secondary"]],
+                    data, nbins=50, labels={"value": col},
+                    color_discrete_sequence=[colors[row_start + i]],
                 )
                 fig.update_layout(height=260, showlegend=False, title=col)
                 st.plotly_chart(fig, use_container_width=True)
@@ -169,7 +159,8 @@ section("🔥 Korelasyon Isı Haritası", "Türetilmiş özellikler + üst önem
 focus_cols = ENG + [c for c in ("tcp_dstport", "tcp_srcport", "tcp_seq", "tcp_ack", "tcp_flags", "tcp_len") if c in df.columns]
 focus_cols = [c for c in focus_cols if c in df.columns]
 if len(focus_cols) >= 2:
-    corr = df[focus_cols].corr().round(2)
+    corr_df = df[focus_cols].replace([np.inf, -np.inf], np.nan)
+    corr = corr_df.corr().round(2)
     fig = px.imshow(
         corr, text_auto=True, aspect="auto",
         color_continuous_scale=[[0, "#3B82F6"], [0.5, "#1E293B"], [1, "#EF4444"]],

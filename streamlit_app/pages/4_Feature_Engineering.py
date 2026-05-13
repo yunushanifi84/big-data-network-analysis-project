@@ -25,7 +25,7 @@ st.markdown("---")
 # ── Üst özet ─────────────────────────────────────────────────────────────────
 c1, c2, c3 = st.columns(3)
 with c1:
-    st.metric("Türetilen feature", f"{len(ENGINEERED_FEATURES)}", "Zorunlu min: 5")
+    st.metric("Türetilen feature", f"{len(ENGINEERED_FEATURES)}")
 with c2:
     st.metric("Modül", "FeatureEngineer", "Spark DataFrame")
 with c3:

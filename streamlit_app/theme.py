@@ -21,6 +21,10 @@ CUSTOM_CSS = """
         background: rgba(15, 23, 42, 0.85);
         border-right: 1px solid rgba(99, 102, 241, 0.2);
     }
+    /* Sidebar'dan 'app' girişini gizle */
+    [data-testid="stSidebarNav"] li:first-child {
+        display: none;
+    }
     /* Başlıklar */
     h1, h2, h3 {
         color: #E2E8F0 !important;

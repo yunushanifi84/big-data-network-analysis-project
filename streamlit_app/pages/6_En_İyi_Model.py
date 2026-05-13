@@ -179,25 +179,3 @@ else:
         f"`{model_key}` için feature_importance CSV bulunamadı. "
         f"İlgili eğitim script'ini çalıştırın → `ml/{model_key}_feature_importance.csv` üretilir."
     )
-
-# ── Sonuç notu ───────────────────────────────────────────────────────────────
-st.markdown("---")
-st.markdown(
-    f"""
-    <div class="info-card" style="border-color:{row['color']}77">
-        <h4>📝 Yorum</h4>
-        <p>
-            <b>{row['display']}</b> modeli için MLflow run id: <code>{row.get('run_id') or '—'}</code>.
-            En çok katkı yapan kolonlar büyük olasılıkla <b>TCP port</b> tabanlı sinyaller
-            (tcp_dstport, tcp_srcport, tcp_seq, tcp_ack) — IoT trafiğinde saldırı vektörlerinin
-            büyük çoğunluğu TCP üzerinden geliyor. Bu beklenen bir sonuç.
-        </p>
-        <p>
-            Türetilmiş 5 özelliğin (özellikle <code>traffic_asymmetry_ratio</code>) ilk 15
-            içinde yer alması, feature engineering çalışmasının modele somut katkı sağladığının
-            kanıtıdır.
-        </p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)

@@ -1,7 +1,6 @@
 """Veri Akışı sayfası — SSE tabanlı gerçek zamanlı izleme."""
 import streamlit as st
 import streamlit.components.v1 as components
-import plotly.graph_objects as go
 
 st.set_page_config(page_title="Veri Akışı", page_icon="🌊", layout="wide")
 
@@ -9,8 +8,8 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from theme import apply_theme, section, pipeline_diagram  # noqa: E402
-from data_loader import get_layer_stats, get_best_run_per_model  # noqa: E402
+from theme import apply_theme, section  # noqa: E402
+from data_loader import get_layer_stats  # noqa: E402
 
 apply_theme()
 
@@ -373,14 +372,6 @@ components.html(_LIVE_HTML, height=680)
 
 st.markdown("---")
 
-# ── Pipeline diyagramı (statik) ───────────────────────────────────────────────
-pipeline_diagram([
-    {"icon": "📡", "title": "Producer", "desc": "kafka/producer.py"},
-    {"icon": "🪣", "title": "Bronze",   "desc": "Ham JSON"},
-    {"icon": "🧹", "title": "Silver",   "desc": "Şema + temizlik"},
-    {"icon": "✨", "title": "Gold",     "desc": "ML-ready"},
-])
-
 # ── Katman detayları (statik, manuel yenile) ──────────────────────────────────
 layer_df = get_layer_stats()
 
@@ -454,52 +445,3 @@ for _, row in layer_df.iterrows():
         unsafe_allow_html=True,
     )
 
-# ── Sankey ────────────────────────────────────────────────────────────────────
-section("🔗 Veri Akış Hacmi", "Katmanlar arası satır akışı")
-
-bronze = layer_df[layer_df["layer"] == "Bronze"]["rows"].iloc[0] if not layer_df.empty else None
-silver = layer_df[layer_df["layer"] == "Silver"]["rows"].iloc[0] if not layer_df.empty else None
-gold   = layer_df[layer_df["layer"] == "Gold"]["rows"].iloc[0]   if not layer_df.empty else None
-
-if bronze and silver and gold:
-    fig = go.Figure(go.Sankey(
-        arrangement="snap",
-        node=dict(
-            pad=24, thickness=22,
-            line=dict(color="rgba(99,102,241,0.5)", width=1),
-            label=[f"Kafka<br>{bronze:,}", f"Bronze<br>{bronze:,}",
-                   f"Silver<br>{silver:,}", f"Gold<br>{gold:,}"],
-            color=["#6366F1", "#CD7F32", "#C0C0C0", "#FFD700"],
-        ),
-        link=dict(
-            source=[0, 1, 2], target=[1, 2, 3],
-            value=[bronze, silver, gold],
-            color=["rgba(99,102,241,0.35)", "rgba(192,192,192,0.35)", "rgba(255,215,0,0.35)"],
-        ),
-    ))
-    fig.update_layout(height=380, margin=dict(l=10, r=10, t=20, b=20))
-    st.plotly_chart(fig, use_container_width=True)
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("Bronze → Silver", f"{silver:,}", f"{(silver-bronze)/bronze*100:+.1f}%")
-    with c2:
-        st.metric("Silver → Gold", f"{gold:,}", f"{(gold-silver)/silver*100:+.1f}%")
-    with c3:
-        st.metric("Toplam veri kaybı", f"{bronze-gold:,}", f"{(gold-bronze)/bronze*100:+.1f}%")
-else:
-    st.info("Katmanlar henüz veri ile dolmamış — pipeline'ı çalıştırın.")
-
-# ── Komutlar ──────────────────────────────────────────────────────────────────
-section("⚡ Çalıştırma Komutları", "Kendiniz deneyin")
-st.code(
-    """# 1) Tüm stack
-docker compose up -d
-
-# 2) Streaming pipeline
-docker compose exec spark-master spark-submit /opt/bitnami/spark/spark/run_streaming_pipeline.py
-
-# 3) Model eğitimi
-docker compose exec spark-master spark-submit /opt/bitnami/spark/ml/03_random_forest.py""",
-    language="bash",
-)
