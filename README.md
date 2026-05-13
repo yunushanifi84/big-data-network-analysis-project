@@ -2,7 +2,7 @@
 
 Bu proje, IoT ve IIoT cihazları üzerinden toplanan **Edge-IIoTset** siber güvenlik veri setini kullanarak ağ trafiği üzerinde **saldırı tipi sınıflandırması** yapmayı amaçlamaktadır. Kafka ile gerçek zamanlı veri akışı, Apache Spark ile dağıtık işleme, Delta Lake ile katmanlı depolama (Medallion Architecture) ve MLflow ile deney takibi yapan uçtan uca bir **Büyük Veri (Big Data)** pipeline'ı içerir.
 
-## � Proje Ekibi
+## Proje Ekibi
 
 | Öğrenci No | Ad Soyad |
 |---|---|
@@ -10,7 +10,7 @@ Bu proje, IoT ve IIoT cihazları üzerinden toplanan **Edge-IIoTset** siber güv
 | 220201061 | Eyüp Ensar Kara |
 | 220201083 | Yunus Hanifi Öztürk |
 
-## �📋 Proje Özeti
+## Proje Özeti
 
 | Bileşen | Teknoloji |
 |---|---|
