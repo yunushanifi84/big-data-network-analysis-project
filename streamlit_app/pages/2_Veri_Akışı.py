@@ -88,8 +88,9 @@ canvas{display:block;border-radius:10px;width:100%}
 /* Connection badge */
 .badge{display:inline-flex;align-items:center;gap:5px;
        font-size:11px;color:#64748B;margin-bottom:10px}
-.bdot{width:7px;height:7px;border-radius:50%;background:#64748B}
+.bdot{width:7px;height:7px;border-radius:50%;background:#64748B;transition:background .3s}
 .bdot.on{background:#10B981}
+.bdot.warn{background:#F59E0B}
 .sec{color:#94A3B8;font-size:10px;text-transform:uppercase;
      letter-spacing:.08em;font-weight:600;margin-bottom:8px}
 </style></head><body>
@@ -182,6 +183,8 @@ const API = "http://localhost:5001";
 const MAX = 120;
 const hist = {Bronze:[], Silver:[], Gold:[]};
 const activeDots = {};
+let reconnectCount = 0;
+let lastEventTime = 0;
 
 // ── Canvas chart ──────────────────────────────────────────────────────────────
 const cv = document.getElementById("ts");
@@ -275,18 +278,31 @@ function connect(){
   const es=new EventSource(API+"/api/stream");
 
   es.onopen=()=>{
+    reconnectCount=0;
     document.getElementById("bd").className="bdot on";
-    document.getElementById("bl").textContent="Canlı — sayfa yenilemesiz";
+    document.getElementById("bl").textContent="Canlı bağlantı aktif";
   };
 
   es.onmessage=function(e){
+    lastEventTime=Date.now();
     const d=JSON.parse(e.data);
     const kafka=d.kafka, layers=d.layers;
 
-    // Kafka card
-    const ok=kafka.status==="ok";
-    document.getElementById("kd").style.background=ok?"#10B981":"#EF4444";
-    document.getElementById("kl").textContent=ok?"Bağlı / Aktif":"Bağlantı yok";
+    // Kafka card — bağlantı durumunu connected flag'den al
+    const connected=kafka.connected||false;
+    const hasData=kafka.total>0;
+    const kDot=document.getElementById("kd");
+    const kLabel=document.getElementById("kl");
+    if(connected&&hasData){
+      kDot.style.background="#10B981";
+      kLabel.textContent="Bağlı · Veri akıyor";
+    }else if(connected&&!hasData){
+      kDot.style.background="#F59E0B";
+      kLabel.textContent="Bağlı · Veri bekleniyor";
+    }else{
+      kDot.style.background="#EF4444";
+      kLabel.textContent="Kafka bağlantısı kuruluyor…";
+    }
     document.getElementById("kc").textContent=kafka.total.toLocaleString();
     document.getElementById("kr").textContent=kafka.rate+" msg/s";
 
@@ -330,14 +346,26 @@ function connect(){
   };
 
   es.onerror=()=>{
-    document.getElementById("bd").className="bdot";
-    document.getElementById("bl").textContent="Bağlantı kesildi — yeniden bağlanıyor…";
-    setTimeout(connect, 3000);
+    es.close();
+    reconnectCount++;
+    const delay=Math.min(reconnectCount*2,10);
+    document.getElementById("bd").className="bdot warn";
+    document.getElementById("bl").textContent=
+      "Yeniden bağlanılıyor… (deneme "+reconnectCount+", "+delay+"s)";
+    setTimeout(connect, delay*1000);
   };
 }
 
 connect();
 window.addEventListener("resize", drawChart);
+
+// Bağlantı sağlık kontrolü: 10s boyunca SSE event gelmezse uyar
+setInterval(()=>{
+  if(lastEventTime>0 && Date.now()-lastEventTime>10000){
+    document.getElementById("bd").className="bdot warn";
+    document.getElementById("bl").textContent="Veri gecikmesi algılandı…";
+  }
+},5000);
 </script></body></html>
 """
 

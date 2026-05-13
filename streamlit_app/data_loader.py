@@ -76,7 +76,7 @@ MODEL_BY_KEY = {m["key"]: m for m in MODELS}
 
 
 # ── MLflow Okuyucusu ─────────────────────────────────────────────────────────
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=30)
 def load_mlflow_runs() -> pd.DataFrame:
     """MLflow SQLite'ından tüm FINISHED run'ları metrik+tag birleşimi ile döner."""
     if not MLFLOW_DB.exists():
@@ -156,7 +156,7 @@ def _normalize_model_type(value: Optional[str]) -> Optional[str]:
     return None
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=30)
 def get_best_run_per_model() -> pd.DataFrame:
     """
     Her model_type için en iyi (accuracy'ye göre) FINISHED run'ı döner.
@@ -211,7 +211,7 @@ def get_best_run_per_model() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=30)
 def get_run_metrics_full(run_id: str) -> Dict[str, float]:
     """Tek bir run'ın tüm metriklerini dict olarak döner."""
     if not MLFLOW_DB.exists() or not run_id:
@@ -267,7 +267,7 @@ def _try_read_delta(path: Path) -> Optional[pd.DataFrame]:
         return None
 
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=30)
 def get_layer_stats() -> pd.DataFrame:
     """Bronze/Silver/Gold katmanları için satır sayısı, kolon sayısı, boyut bilgisi."""
     layers = [
@@ -334,7 +334,7 @@ def get_kafka_topic_offsets() -> dict:
         return {"status": "error", "error": str(exc)[:120], "total_messages": 0, "partitions": 0}
 
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=5)
 def get_layer_freshness() -> Dict[str, dict]:
     """Bronze/Silver/Gold katmanlarının son değişiklik zamanını döner."""
     result: Dict[str, dict] = {}
@@ -365,7 +365,7 @@ def get_layer_freshness() -> Dict[str, dict]:
     return result
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=60)
 def load_gold_sample(limit: int = 50_000) -> pd.DataFrame:
     """Gold tablosundan örnek satır seti. Cache'lendiği için tek seferlik maliyet."""
     df = _try_read_delta(DELTA_ROOT / "gold" / "ml_ready_compact")

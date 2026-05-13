@@ -28,6 +28,7 @@ LAYER_PATHS = {
 stats = {
     "kafka_count": 0,
     "msg_rate":    0,
+    "kafka_connected": False,
     "attack_counts": {},
     "recent_messages": deque(maxlen=50),
     "started_at": time.time(),
@@ -49,6 +50,8 @@ def kafka_consumer_thread():
                 enable_auto_commit=True,
             )
             print("[API] Kafka bağlantısı kuruldu.", flush=True)
+            with _lock:
+                stats["kafka_connected"] = True
             batch, last_check = 0, time.time()
             while True:
                 for tp, msgs in consumer.poll(timeout_ms=500).items():
@@ -73,6 +76,8 @@ def kafka_consumer_thread():
                         stats["msg_rate"] = sum(_rate_window) // max(len(_rate_window), 1)
                     batch, last_check = 0, now
         except Exception as exc:
+            with _lock:
+                stats["kafka_connected"] = False
             print(f"[API] Kafka hatası: {exc}. 5s sonra tekrar.", flush=True)
             time.sleep(5)
 
@@ -99,7 +104,7 @@ def _row_count_thread():
                 count = _count_parquet_rows(path)
                 with _row_lock:
                     _row_counts[name] = count
-        time.sleep(30)
+        time.sleep(10)
 
 
 # ── Layer freshness ────────────────────────────────────────────────────────────
@@ -143,10 +148,12 @@ def stream_sse():
         while True:
             try:
                 with _lock:
+                    connected = stats["kafka_connected"]
                     kafka = {
-                        "status": "ok" if stats["kafka_count"] > 0 else "waiting",
+                        "status": "ok" if connected else "waiting",
                         "total":  stats["kafka_count"],
                         "rate":   stats["msg_rate"],
+                        "connected": connected,
                     }
                 payload = json.dumps({
                     "ts":     datetime.now().isoformat(),
