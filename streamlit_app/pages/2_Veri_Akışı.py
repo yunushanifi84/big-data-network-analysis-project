@@ -323,10 +323,10 @@ function connect(){
     const kNode=document.getElementById("af-Kafka");
     const kSt=document.getElementById("af-st-Kafka");
     if(kNode){
-      kNode.style.opacity=ok?"1":"0.4";
-      ok?kNode.classList.add("w"):kNode.classList.remove("w");
-      kSt.textContent=ok?"● Aktif":"● Kapalı";
-      kSt.style.color=ok?"#10B981":"#EF4444";
+      kNode.style.opacity=connected?"1":"0.4";
+      connected?kNode.classList.add("w"):kNode.classList.remove("w");
+      kSt.textContent=connected?"● Aktif":"● Kapalı";
+      kSt.style.color=connected?"#10B981":"#EF4444";
     }
     // Each pipe animates when the DOWNSTREAM node is being written to:
     //   pipe-K → Bronze active (data flowing INTO Bronze)
