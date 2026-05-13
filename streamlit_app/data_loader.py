@@ -139,19 +139,26 @@ def load_mlflow_runs() -> pd.DataFrame:
 
 
 def _normalize_model_type(value: Optional[str]) -> Optional[str]:
-    """MLflow 'model_type' tag'ini bizim 'key' alanımıza eşler."""
+    """
+    MLflow 'model_type' tag'ini veya run name'ini bizim 'key' alanımıza eşler.
+    Boşluk/alt çizgi/tire farklılıklarına dayanıklı.
+
+    NOT: Artık tüm modeller multi-class (Attack_type) için eğitiliyor.
+    Eski "multiclass_v1" isimli LR run'ı da geriye dönük olarak logistic_regression'a
+    eşlenir; "OneVsRest" suffix'li olan GBT olduğu için gbt'ye eşlenir.
+    """
     if not value or not isinstance(value, str):
         return None
-    v = value.lower()
+    v = value.lower().replace(" ", "").replace("_", "").replace("-", "")
     if "logistic" in v:
         return "logistic_regression"
-    if "decision" in v or v.startswith("dt"):
+    if "decisiontree" in v or v.startswith("dt"):
         return "decision_tree"
-    if "random forest" in v or v.startswith("rf"):
+    if "randomforest" in v or v.startswith("rf"):
         return "random_forest"
     if "gradient" in v or "gbt" in v:
         return "gbt"
-    if "bayes" in v or v.startswith("nb"):
+    if "naive" in v or "bayes" in v or v.startswith("nb"):
         return "naive_bayes"
     return None
 
@@ -159,9 +166,14 @@ def _normalize_model_type(value: Optional[str]) -> Optional[str]:
 @st.cache_data(ttl=30)
 def get_best_run_per_model() -> pd.DataFrame:
     """
-    Her model_type için en iyi (accuracy'ye göre) FINISHED run'ı döner.
-    MLflow tag yoksa run name pattern'iyle dener.
-    Sonuç tüm 5 modelin satırını içerir — eksiklerde NaN bırakılır.
+    Her model_type için en iyi run'ı döner.
+
+    Strateji:
+    1) Run'ları model anahtarına eşle (tag → fallback run name).
+    2) Mevcut sınıflandırma tipini tercih et: 'multiclass' tag'i olan
+       run'lar binary olanlardan ÖNCELİKLİDİR. (Proje artık multi-class.)
+    3) Aynı sınıflandırma tipi içinde F1-Score'a göre sırala.
+       (Multi-class'ta accuracy sınıf dengesizliğinden çok etkilenir, F1 daha dürüst.)
     """
     runs = load_mlflow_runs()
     rows: List[Dict] = []
@@ -171,9 +183,16 @@ def get_best_run_per_model() -> pd.DataFrame:
         runs["__model_key"] = runs.get("model_type", pd.Series([None] * len(runs))).map(
             _normalize_model_type
         )
-        # tag yoksa run name'den dene
         name_fallback = runs["name"].fillna("").str.lower().map(_normalize_model_type)
         runs["__model_key"] = runs["__model_key"].fillna(name_fallback)
+        # multiclass tag'i olanlar 1, olmayanlar 0 — desc sıralamada multiclass öne geçer
+        runs["__is_multiclass"] = (
+            runs.get("classification_type", pd.Series([None] * len(runs)))
+            .fillna("")
+            .str.lower()
+            .eq("multiclass")
+            .astype(int)
+        )
 
     for model in MODELS:
         key = model["key"]
@@ -190,13 +209,21 @@ def get_best_run_per_model() -> pd.DataFrame:
             "log_loss": None,
             "duration_sec": None,
             "num_classes": None,
+            "classification_type": None,
             "has_mlflow": False,
         }
         if not runs.empty:
             sub = runs[runs["__model_key"] == key]
-            if not sub.empty and "accuracy" in sub.columns:
-                # En iyi accuracy
-                best = sub.sort_values("accuracy", ascending=False).iloc[0]
+            if not sub.empty:
+                # Önce multiclass'ı tercih et, sonra F1-Score (yoksa accuracy)
+                sort_cols = ["__is_multiclass"]
+                if "f1_score" in sub.columns:
+                    sort_cols.append("f1_score")
+                if "accuracy" in sub.columns:
+                    sort_cols.append("accuracy")
+                best = sub.sort_values(
+                    sort_cols, ascending=[False] * len(sort_cols), na_position="last"
+                ).iloc[0]
                 row["run_id"] = best["run_uuid"]
                 for m in ("accuracy", "f1_score", "precision", "recall", "auc_roc", "log_loss"):
                     if m in sub.columns:
@@ -205,6 +232,7 @@ def get_best_run_per_model() -> pd.DataFrame:
                     float(best["duration_sec"]) if pd.notna(best.get("duration_sec")) else None
                 )
                 row["num_classes"] = best.get("num_classes")
+                row["classification_type"] = best.get("classification_type")
                 row["has_mlflow"] = True
         rows.append(row)
 

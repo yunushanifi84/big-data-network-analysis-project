@@ -1,161 +1,84 @@
 """
-Adım 6.3 — Model 2: Decision Tree
-====================================
-Yorumlanabilir bir binary sınıflandırma modeli olarak Decision Tree eğitir,
-hiperparametre optimizasyonu uygular ve sonuçları MLflow'a loglar.
-
-Avantajlar:
-  - Yorumlanabilirlik: karar ağacı yapısı (derinlik, düğüm sayısı) kolayca raporlanır.
-  - Feature importance doğrudan modelden çıkarılabilir.
-
-Riskler:
-  - Overfitting: maxDepth sınırlı tutulmalıdır.
+Adım 6.3 — Model 2: Decision Tree (Multi-class)
+==================================================
+Saldırı tipi (Attack_type) için yorumlanabilir bir multi-class Decision Tree.
+Cross validation ile hiperparametre seçer, MLflow'a loglar.
 
 Çalıştırma:
     docker exec spark-master spark-submit \
         --packages io.delta:delta-core_2.12:2.4.0 \
         /opt/bitnami/spark/ml/02_decision_tree.py
-
-Hızlı test:
-    docker exec spark-master spark-submit \
-        --packages io.delta:delta-core_2.12:2.4.0 \
-        /opt/bitnami/spark/ml/02_decision_tree.py --fast --sample-size 5000
 """
-
 import argparse
 import sys
 import time
 
 from pyspark.ml import Pipeline
 from pyspark.ml.classification import DecisionTreeClassifier
-from pyspark.ml.evaluation import BinaryClassificationEvaluator
+from pyspark.ml.evaluation import MulticlassClassificationEvaluator
 from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 
-# Proje kökünü Python path'e ekle
 sys.path.insert(0, "/opt/bitnami/spark")
 
 from spark.spark_session import get_spark
 from ml.utils import (
-    run_ml_pipeline,
-    evaluate_model,
-    compute_confusion_matrix,
+    run_ml_pipeline_multiclass,
+    evaluate_model_multiclass,
+    compute_confusion_matrix_multiclass,
     log_to_mlflow,
 )
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Adım 6.3 Decision Tree eğitimi")
-    parser.add_argument(
-        "--fast",
-        action="store_true",
-        help="Hızlı mod (eğitim verisini örneklem ile sınırlar)",
-    )
-    parser.add_argument(
-        "--sample-size",
-        type=int,
-        default=10000,
-        help="Hızlı modda train setinden kullanılacak satır sayısı",
-    )
-    parser.add_argument(
-        "--cv-mode",
-        choices=["quick", "full"],
-        default="quick",
-        help="CV kapsamı: quick (daha hızlı) veya full (daha kapsamlı)",
-    )
-    parser.add_argument(
-        "--cv-parallelism",
-        type=int,
-        default=2,
-        help="CrossValidator parallelism değeri",
-    )
+    parser = argparse.ArgumentParser(description="Decision Tree multi-class eğitimi")
+    parser.add_argument("--fast", action="store_true")
+    parser.add_argument("--sample-size", type=int, default=30000)
+    parser.add_argument("--cv-mode", choices=["quick", "full"], default="quick")
+    parser.add_argument("--cv-parallelism", type=int, default=2)
     return parser.parse_args()
 
 
-# ─────────────────────────────────────────────
-#  Feature Importance
-# ─────────────────────────────────────────────
-
 def extract_feature_importance(cv_model, feature_cols):
-    """
-    Best model'in featureImportances vektöründen en önemli 10 feature'ı çıkarır.
-    Decision Tree, Gini/Entropy tabanlı feature importance sağlar.
-    """
-    best_pipeline_model = cv_model.bestModel
-    dt_model = best_pipeline_model.stages[-1]
+    dt_model = cv_model.bestModel.stages[-1]
     importances = dt_model.featureImportances.toArray().tolist()
+    pairs = sorted(zip(feature_cols, importances), key=lambda x: x[1], reverse=True)
+    return pairs[:10]
 
-    importance_pairs = [
-        (feature_name, importance_value)
-        for feature_name, importance_value in zip(feature_cols, importances)
-    ]
-    importance_pairs.sort(key=lambda x: x[1], reverse=True)
-    return importance_pairs[:10]
-
-
-# ─────────────────────────────────────────────
-#  Karar Ağacı Yapı Analizi
-# ─────────────────────────────────────────────
 
 def analyze_tree_structure(cv_model):
-    """
-    Eğitilmiş karar ağacının yapısını analiz eder ve raporlar.
-
-    Raporlananlar:
-    - Ağaç derinliği (depth)
-    - Toplam düğüm sayısı (numNodes)
-    - Karar kuralı debug string'i (toDebugString özeti)
-
-    Returns:
-        dict: Ağaç yapı bilgileri
-    """
-    best_pipeline_model = cv_model.bestModel
-    dt_model = best_pipeline_model.stages[-1]
-
+    dt_model = cv_model.bestModel.stages[-1]
     depth = dt_model.depth
     num_nodes = dt_model.numNodes
-
     debug_string = dt_model.toDebugString
-    # Debug string çok uzun olabilir — ilk 50 satırı al
     debug_lines = debug_string.split("\n")
     debug_preview = "\n".join(debug_lines[:50])
     if len(debug_lines) > 50:
         debug_preview += f"\n... ({len(debug_lines) - 50} satır daha)"
 
-    print("\n🌳 Karar Ağacı Yapı Analizi:")
-    print(f"   Derinlik (depth):      {depth}")
-    print(f"   Toplam düğüm sayısı:   {num_nodes}")
-    print(f"   Yaprak düğüm sayısı:   ~{(num_nodes + 1) // 2}")
-    print(f"   Debug string satır:    {len(debug_lines)}")
-    print(f"\n   Ağaç yapısı önizleme (ilk 20 satır):")
-    for line in debug_lines[:20]:
-        print(f"   {line}")
-    if len(debug_lines) > 20:
-        print(f"   ... ({len(debug_lines) - 20} satır daha)")
-
+    print("\n🌳 Karar Ağacı Yapı:")
+    print(f"   Derinlik: {depth} | Düğüm: {num_nodes} | Yaprak: ~{(num_nodes+1)//2}")
     return {
         "depth": depth,
         "num_nodes": num_nodes,
         "num_leaves": (num_nodes + 1) // 2,
-        "debug_string_lines": len(debug_lines),
         "debug_string_preview": debug_preview,
     }
 
 
-# ─────────────────────────────────────────────
-#  Feature Importance Bar Chart
-# ─────────────────────────────────────────────
+def confusion_matrix_to_text(cm: dict) -> str:
+    labels = cm["labels"]
+    matrix = cm["matrix"]
+    lines = ["true_label," + ",".join(labels)]
+    for i, name in enumerate(labels):
+        row = ",".join(str(v) for v in matrix[i])
+        lines.append(f"{name},{row}")
+    return "\n".join(lines) + "\n"
+
 
 def save_feature_importance_chart(top_features, output_path):
-    """
-    En önemli feature'ları horizontal bar chart olarak kaydeder.
-
-    Args:
-        top_features: [(feature_name, importance)] listesi
-        output_path: Grafik dosya yolu (.png)
-    """
     try:
         import matplotlib
-        matplotlib.use("Agg")  # Non-interactive backend
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
         names = [f[0] for f in reversed(top_features)]
@@ -163,64 +86,46 @@ def save_feature_importance_chart(top_features, output_path):
 
         fig, ax = plt.subplots(figsize=(10, 6))
         bars = ax.barh(names, values, color="#2196F3", edgecolor="#1565C0", height=0.6)
-
-        # Değerleri bar'ların yanına yaz
         for bar, val in zip(bars, values):
-            ax.text(
-                bar.get_width() + max(values) * 0.01,
-                bar.get_y() + bar.get_height() / 2,
-                f"{val:.4f}",
-                va="center",
-                fontsize=9,
-                fontweight="bold",
-            )
-
+            ax.text(bar.get_width() + max(values) * 0.01,
+                    bar.get_y() + bar.get_height() / 2,
+                    f"{val:.4f}", va="center", fontsize=9, fontweight="bold")
         ax.set_xlabel("Feature Importance (Gini/Entropy)", fontsize=11)
-        ax.set_title("Decision Tree — Top 10 Feature Importance", fontsize=13, fontweight="bold")
+        ax.set_title("Decision Tree — Top 10 Feature Importance (Multi-class)",
+                     fontsize=13, fontweight="bold")
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
-
         plt.tight_layout()
         plt.savefig(output_path, dpi=150, bbox_inches="tight")
         plt.close()
-        print(f"   ✅ Feature importance chart kaydedildi: {output_path}")
-    except ImportError:
-        print("   ⚠️ matplotlib yüklü değil, chart kaydedilemedi.")
+        print(f"   ✅ Chart kaydedildi: {output_path}")
     except Exception as e:
         print(f"   ⚠️ Chart kaydedilemedi: {e}")
 
-
-# ─────────────────────────────────────────────
-#  Ana Akış
-# ─────────────────────────────────────────────
 
 def main():
     args = parse_args()
     total_start = time.perf_counter()
 
     print("=" * 60)
-    print("  Adım 6.3 — Decision Tree Eğitimi")
+    print("  Decision Tree — Attack_type sınıflandırma (multi-class)")
     print("=" * 60)
-    print(
-        f"  Mod: {'fast' if args.fast else 'normal'} | CV: {args.cv_mode} | "
-        f"CV parallelism: {args.cv_parallelism}"
-    )
+    print(f"  Mod: {'fast' if args.fast else 'normal'} | CV: {args.cv_mode}")
 
-    # ── 1) Spark başlat ──
-    spark = get_spark("Model-2-DecisionTree")
+    spark = get_spark("Model-2-DecisionTree-Multiclass")
 
-    # ── 2) Ortak pipeline (6.1 çıktıları) ──
-    print("\n[1/7] Veri pipeline hazırlanıyor...")
+    print("\n[1/7] Multi-class veri pipeline hazırlanıyor...")
     stage_start = time.perf_counter()
-    train_df, test_df, feature_cols = run_ml_pipeline(
+    train_df, test_df, feature_cols, label_index_model = run_ml_pipeline_multiclass(
         spark,
         sample_size=args.sample_size if args.fast else None,
         split_log_stats=not args.fast,
     )
-    print(f"   ⏱️ Ortak pipeline süresi: {time.perf_counter() - stage_start:.2f}s")
-    print(f"   📌 Feature sayısı: {len(feature_cols)}")
+    label_names = list(label_index_model.labels)
+    num_classes = len(label_names)
+    print(f"   ⏱️ Pipeline süresi: {time.perf_counter() - stage_start:.2f}s")
+    print(f"   📌 Feature: {len(feature_cols)} | Sınıf: {num_classes}")
 
-    # ── 3) Decision Tree + Pipeline ──
     print("\n[2/7] Decision Tree pipeline kuruluyor...")
     dt = DecisionTreeClassifier(
         featuresCol="features",
@@ -231,8 +136,7 @@ def main():
     )
     pipeline = Pipeline(stages=[dt])
 
-    # ── 4) Cross Validation — Hiperparametre Tune ──
-    print("\n[3/7] Cross Validation ile hiperparametre optimizasyonu...")
+    print("\n[3/7] Cross Validation...")
     if args.fast:
         max_depth_values = [5, 10]
         min_instances_values = [1, 5]
@@ -261,10 +165,8 @@ def main():
     cv = CrossValidator(
         estimator=pipeline,
         estimatorParamMaps=param_grid,
-        evaluator=BinaryClassificationEvaluator(
-            labelCol="label",
-            rawPredictionCol="rawPrediction",
-            metricName="areaUnderROC",
+        evaluator=MulticlassClassificationEvaluator(
+            labelCol="label", predictionCol="prediction", metricName="f1",
         ),
         numFolds=num_folds,
         seed=42,
@@ -272,20 +174,13 @@ def main():
     )
 
     total_cv_runs = len(param_grid) * num_folds
-    print(
-        f"   📌 Grid boyutu: {len(param_grid)} kombinasyon | Fold: {num_folds} | "
-        f"Toplam fit: {total_cv_runs}"
-    )
-    print(f"   📌 maxDepth: {max_depth_values}")
-    print(f"   📌 minInstancesPerNode: {min_instances_values}")
-    print(f"   📌 impurity: {impurity_values}")
+    print(f"   📌 Grid: {len(param_grid)} | Fold: {num_folds} | Toplam fit: {total_cv_runs}")
 
     cv_start = time.perf_counter()
     cv_model = cv.fit(train_df)
-    print(f"   ⏱️ Cross Validation süresi: {time.perf_counter() - cv_start:.2f}s")
+    print(f"   ⏱️ CV süresi: {time.perf_counter() - cv_start:.2f}s")
 
-    best_pipeline_model = cv_model.bestModel
-    best_dt_model = best_pipeline_model.stages[-1]
+    best_dt_model = cv_model.bestModel.stages[-1]
     print(
         "   ✅ En iyi parametreler: "
         f"maxDepth={best_dt_model.getOrDefault('maxDepth')}, "
@@ -293,38 +188,30 @@ def main():
         f"impurity={best_dt_model.getOrDefault('impurity')}"
     )
 
-    # ── 5) Test seti değerlendirme ──
-    print("\n[4/7] Test seti üzerinde değerlendirme...")
+    print("\n[4/7] Test seti değerlendirme...")
     eval_start = time.perf_counter()
-    predictions = best_pipeline_model.transform(test_df)
-    metrics = evaluate_model(predictions)
-    confusion = compute_confusion_matrix(predictions)
-    print(f"   ⏱️ Test değerlendirme süresi: {time.perf_counter() - eval_start:.2f}s")
+    predictions = cv_model.bestModel.transform(test_df)
+    metrics = evaluate_model_multiclass(predictions, num_classes=num_classes)
+    confusion = compute_confusion_matrix_multiclass(predictions, label_names=label_names)
+    print(f"   ⏱️ Test süresi: {time.perf_counter() - eval_start:.2f}s")
 
-    # ── 6) Karar ağacı yapı analizi ──
-    print("\n[5/7] Karar ağacı yapısı yorumlanıyor...")
+    print("\n[5/7] Ağaç yapısı analiz...")
     tree_info = analyze_tree_structure(cv_model)
 
-    # ── 7) Feature importance ──
-    print("\n[6/7] Feature importance çıkarılıyor...")
-    fi_start = time.perf_counter()
+    print("\n[6/7] Feature importance...")
     top_features = extract_feature_importance(cv_model, feature_cols)
     print("   Top 10 feature:")
     for idx, (fname, importance) in enumerate(top_features, start=1):
         print(f"   {idx:>2}. {fname:<30} {importance:.6f}")
-
-    # Horizontal bar chart kaydet
     chart_path = "/opt/bitnami/spark/ml/dt_feature_importance.png"
     save_feature_importance_chart(top_features, chart_path)
-    print(f"   ⏱️ Feature importance süresi: {time.perf_counter() - fi_start:.2f}s")
 
-    # ── 8) MLflow Logging ──
     print("\n[7/7] MLflow'a loglanıyor...")
-    mlflow_start = time.perf_counter()
     best_params = {
         "maxDepth": int(best_dt_model.getOrDefault("maxDepth")),
         "minInstancesPerNode": int(best_dt_model.getOrDefault("minInstancesPerNode")),
         "impurity": str(best_dt_model.getOrDefault("impurity")),
+        "numClasses": int(num_classes),
         "numFolds": num_folds,
         "grid_size": len(param_grid),
         "cv_total_fits": total_cv_runs,
@@ -334,70 +221,63 @@ def main():
         "tree_depth": tree_info["depth"],
         "tree_num_nodes": tree_info["num_nodes"],
         "tree_num_leaves": tree_info["num_leaves"],
+        "label_column": "Attack_type",
     }
     if args.fast:
         best_params["fast_mode"] = True
         best_params["sample_size"] = int(args.sample_size)
 
-    run_name = "decision_tree_v1_fast" if args.fast else "decision_tree_v1"
-
-    # Ağaç yapısı metrikleri ek olarak logla
     metrics["tree_depth"] = float(tree_info["depth"])
     metrics["tree_num_nodes"] = float(tree_info["num_nodes"])
 
+    confusion_metrics_for_mlflow = {}
+    for i, name in enumerate(label_names):
+        confusion_metrics_for_mlflow[f"row_total_class_{i}"] = confusion["row_totals"][i]
+        confusion_metrics_for_mlflow[f"per_class_acc_{i}"] = confusion["per_class_acc"][i]
+
+    run_name = "decision_tree_v1_fast" if args.fast else "decision_tree_v1"
     run_id = log_to_mlflow(
         run_name=run_name,
         model_type="DecisionTree",
         params=best_params,
-        metrics=metrics,
-        model=best_pipeline_model,
-        confusion_matrix=confusion,
+        metrics={**metrics, **confusion_metrics_for_mlflow},
+        model=cv_model.bestModel,
+        confusion_matrix=None,
         feature_importance=top_features,
         tags={
             "task": "step_6_3",
             "model_index": "2",
-            "classification_type": "binary",
+            "classification_type": "multiclass",
+            "label_column": "Attack_type",
+            "num_classes": str(num_classes),
             "interpretable": "true",
         },
     )
 
-    # Ağaç yapısı debug string'ini MLflow'a artifact olarak logla
     try:
         import mlflow
-
+        import os
         with mlflow.start_run(run_id=run_id):
+            mlflow.log_text(tree_info["debug_string_preview"], "tree_structure.txt")
+            mlflow.log_text(confusion_matrix_to_text(confusion), "confusion_matrix.csv")
             mlflow.log_text(
-                tree_info["debug_string_preview"],
-                "tree_structure.txt",
+                "\n".join(f"{i},{name}" for i, name in enumerate(label_names)),
+                "label_index_mapping.csv",
             )
-            # Feature importance chart'ı da artifact olarak ekle
-            try:
-                import os
-                if os.path.exists(chart_path):
-                    mlflow.log_artifact(chart_path, "charts")
-            except Exception as e:
-                print(f"   ⚠️ Chart artifact loglanamadı: {e}")
-
-        print("   ✅ Ağaç yapısı ve chart MLflow'a loglandı.")
+            if os.path.exists(chart_path):
+                mlflow.log_artifact(chart_path, "charts")
     except Exception as e:
-        print(f"   ⚠️ Ağaç yapısı loglanamadı: {e}")
+        print(f"   ⚠️ Artifact loglama hatası: {e}")
 
-    print(f"   ⏱️ MLflow loglama süresi: {time.perf_counter() - mlflow_start:.2f}s")
-
-    # ── Özet ──
     print("\n" + "=" * 60)
-    print("  ✅ Adım 6.3 — Decision Tree tamamlandı!")
+    print("  ✅ Decision Tree (Multi-class) tamamlandı!")
     print("=" * 60)
     print(f"  Run ID: {run_id}")
-    print(f"  MLflow UI: http://localhost:5000")
-    print(f"  En iyi maxDepth: {best_params['maxDepth']}")
-    print(f"  En iyi impurity: {best_params['impurity']}")
-    print(f"  Ağaç derinliği: {tree_info['depth']}")
-    print(f"  Düğüm sayısı: {tree_info['num_nodes']}")
-    print(f"  AUC-ROC: {metrics.get('auc_roc', 0):.4f}")
+    print(f"  Sınıf sayısı: {num_classes}")
     print(f"  Accuracy: {metrics.get('accuracy', 0):.4f}")
     print(f"  F1-Score: {metrics.get('f1_score', 0):.4f}")
-    print(f"  Toplam eğitim süresi: {time.perf_counter() - total_start:.2f}s")
+    print(f"  Ağaç derinliği: {tree_info['depth']} | Düğüm: {tree_info['num_nodes']}")
+    print(f"  Toplam süre: {time.perf_counter() - total_start:.2f}s")
     print("=" * 60)
 
     spark.stop()
