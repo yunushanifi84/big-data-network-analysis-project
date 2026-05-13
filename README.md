@@ -2,7 +2,15 @@
 
 Bu proje, IoT ve IIoT cihazları üzerinden toplanan **Edge-IIoTset** siber güvenlik veri setini kullanarak ağ trafiği üzerinde **saldırı tipi sınıflandırması** yapmayı amaçlamaktadır. Kafka ile gerçek zamanlı veri akışı, Apache Spark ile dağıtık işleme, Delta Lake ile katmanlı depolama (Medallion Architecture) ve MLflow ile deney takibi yapan uçtan uca bir **Büyük Veri (Big Data)** pipeline'ı içerir.
 
-## � Proje Özeti
+## � Proje Ekibi
+
+| Öğrenci No | Ad Soyad |
+|---|---|
+| 220201018 | Abdulrahman Dülek |
+| 220201061 | Eyüp Ensar Kara |
+| 220201083 | Yunus Hanifi Öztürk |
+
+## �📋 Proje Özeti
 
 | Bileşen | Teknoloji |
 |---|---|
@@ -136,6 +144,15 @@ Durdurmak için `Ctrl+C` kullanın.
 
 Tüm modeller Gold katmanındaki temiz ve zenginleştirilmiş veriyi kullanarak `Attack_type` sınıflandırması yapar. Her model CrossValidator ile hiperparametre optimizasyonu uygular ve sonuçları MLflow'a loglar.
 
+Model eğitimi için **iki yöntem** sunulmaktadır:
+
+| Yöntem | Açıklama | Ne Zaman Kullanmalı? |
+|---|---|---|
+| **A) CLI (spark-submit)** | Terminal üzerinden tek komutla eğitim | Hızlı, otomatize edilebilir, production odaklı |
+| **B) Jupyter Notebook** | Adım adım interaktif eğitim | Keşifsel analiz, görselleştirme, eğitim sürecini anlama |
+
+> 💡 Her iki yöntem de aynı model mantığını kullanır ve sonuçları MLflow'a loglar.
+
 ### 0. Kurulum Doğrulama
 
 ```bash
@@ -144,37 +161,52 @@ docker exec spark-master spark-submit --packages io.delta:delta-core_2.12:2.4.0 
 
 ### 1. Logistic Regression (Multinomial)
 
+**A) CLI:**
 ```bash
 docker exec spark-master spark-submit --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/01_logistic_regression.py
 ```
 
+**B) Notebook:** [`notebooks/03_logistic_regression.ipynb`](notebooks/03_logistic_regression.ipynb) → JupyterLab: `http://localhost:8888`
+
 ### 2. Decision Tree
 
+**A) CLI:**
 ```bash
 docker exec spark-master spark-submit --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/02_decision_tree.py
 ```
 
+**B) Notebook:** [`notebooks/04_decision_tree.ipynb`](notebooks/04_decision_tree.ipynb) → JupyterLab: `http://localhost:8888`
+
 ### 3. Random Forest
 
+**A) CLI:**
 ```bash
 docker exec spark-master spark-submit --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/03_random_forest.py
 ```
+
+**B) Notebook:** [`notebooks/05_random_forest.ipynb`](notebooks/05_random_forest.ipynb) → JupyterLab: `http://localhost:8888`
 
 ### 4. GBT (OneVsRest)
 
 > ⚠️ GBT doğrudan multi-class desteklemez; `OneVsRest` wrapper ile her sınıf için ayrı binary GBT eğitilir. Diğer modellere göre ~N kat daha yavaştır.
 
+**A) CLI:**
 ```bash
 docker exec spark-master spark-submit --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/04_gbt.py
 ```
 
+**B) Notebook:** [`notebooks/06_gbt.ipynb`](notebooks/06_gbt.ipynb) → JupyterLab: `http://localhost:8888`
+
 ### 5. Naive Bayes
 
+**A) CLI:**
 ```bash
 docker exec spark-master spark-submit --packages io.delta:delta-core_2.12:2.4.0 /opt/bitnami/spark/ml/05_naive_bayes.py
 ```
 
-### Ortak Parametreler
+**B) Notebook:** [`notebooks/07_naive_bayes.ipynb`](notebooks/07_naive_bayes.ipynb) → JupyterLab: `http://localhost:8888`
+
+### Ortak CLI Parametreleri
 
 Tüm model script'leri aşağıdaki argümanları kabul eder:
 
@@ -197,7 +229,7 @@ docker exec spark-master spark-submit --packages io.delta:delta-core_2.12:2.4.0 
 
 ### MLflow Çıktıları
 
-Her eğitim şu artifact'ları MLflow'a loglar:
+Her eğitim (CLI veya Notebook) şu artifact'ları MLflow'a loglar:
 - **Metrikler:** accuracy, f1_score, precision, recall, log_loss (weighted, multi-class)
 - **Parametreler:** tüm hiperparametreler + CV konfigürasyonu
 - **Artifact'lar:** `confusion_matrix.csv` (NxN), `label_index_mapping.csv`, `cv_results.csv`, feature importance chart (PNG + CSV)
@@ -218,7 +250,7 @@ http://localhost:8501
 | Genel Bakış | Sistem durumu, servis sağlığı |
 | Veri Akışı | Kafka → Delta Lake pipeline izleme |
 | EDA | Keşifsel veri analizi ve görselleştirmeler |
-| ML Performans | Tek model detaylı performans raporu |
+| Feature Engineering | Gold katmanı özellik mühendisliği detayları |
 | Model Karşılaştırma | 5 modelin yan yana multi-class karşılaştırması (F1 sıralı) |
 | En İyi Model | Şampiyon model seçimi ve production tavsiyesi |
 
@@ -228,28 +260,56 @@ http://localhost:8501
 
 ```
 big-data-project/
-├── kafka/                  # Kafka producer & consumer
+├── kafka/                      # Kafka producer & consumer
 │   ├── producer.py
 │   └── consumer_test.py
 ├── spark/
-│   ├── preprocessing/      # Veri temizleme, kalite kontrolü
-│   ├── streaming/          # Bronze / Silver / Gold katmanları
-│   └── spark_session.py    # Paylaşılan Spark oturum yönetimi
+│   ├── preprocessing/          # Veri temizleme, kalite kontrolü
+│   │   ├── data_cleaner.py
+│   │   ├── data_quality.py
+│   │   ├── feature_engineering.py
+│   │   └── run_pipeline.py
+│   ├── streaming/              # Bronze / Silver / Gold katmanları
+│   │   ├── bronze_layer.py
+│   │   ├── silver_layer.py
+│   │   ├── gold_layer.py
+│   │   └── read_kafka.py
+│   ├── spark_session.py        # Paylaşılan Spark oturum yönetimi
+│   ├── run_bronze.py           # Sadece Bronze test script'i
+│   └── run_streaming_pipeline.py  # Uçtan uca streaming
 ├── ml/
-│   ├── utils.py            # Ortak ML utility'leri (pipeline, eval, mlflow)
+│   ├── utils.py                # Ortak ML utility'leri (pipeline, eval, mlflow)
 │   ├── 01_logistic_regression.py
 │   ├── 02_decision_tree.py
 │   ├── 03_random_forest.py
-│   ├── 04_gbt.py           # OneVsRest wrapper
+│   ├── 04_gbt.py               # OneVsRest wrapper
 │   ├── 05_naive_bayes.py
-│   └── validate_setup.py
+│   ├── validate_setup.py
+│   ├── check_runs.py           # MLflow run kontrol
+│   └── sanity_check.py         # Veri doğrulama
 ├── streamlit_app/
-│   ├── app.py              # Ana sayfa
-│   ├── data_loader.py      # MLflow DB & Delta okuyucu
-│   ├── theme.py            # Koyu tema
-│   └── pages/              # Streamlit çok sayfalı yapı
-├── notebooks/              # Jupyter analiz notebook'ları
-├── docker/                 # Dockerfile'lar
+│   ├── app.py                  # Ana sayfa
+│   ├── data_loader.py          # MLflow DB & Delta okuyucu
+│   ├── theme.py                # Koyu tema
+│   └── pages/                  # Streamlit çok sayfalı yapı
+│       ├── 1_Genel_Bakış.py
+│       ├── 2_Veri_Akışı.py
+│       ├── 3_EDA.py
+│       ├── 4_Feature_Engineering.py
+│       ├── 5_Model_Karşılaştırma.py
+│       └── 6_En_İyi_Model.py
+├── notebooks/                  # Jupyter analiz notebook'ları
+│   ├── 01_eda.ipynb
+│   ├── 02_data_presentation.ipynb
+│   ├── 03_logistic_regression.ipynb
+│   ├── 04_decision_tree.ipynb
+│   ├── 05_random_forest.ipynb
+│   ├── 06_gbt.ipynb
+│   └── 07_naive_bayes.ipynb
+├── docs/                       # Proje dokümanları
+│   ├── rapor.tex
+│   └── data_quality_report.md
+├── docker/                     # Dockerfile'lar
 ├── docker-compose.yml
 └── README.md
 ```
