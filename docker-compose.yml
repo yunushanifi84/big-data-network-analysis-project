@@ -134,6 +134,25 @@ services:
     networks:
       - bigdata-net
 
+  streamlit-dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.streamlit
+    container_name: streamlit-dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      - MLFLOW_DB=/app/mlruns/mlflow.db
+      - DELTA_ROOT=/app/delta-storage
+      - ML_DIR=/app/ml
+    volumes:
+      - ./streamlit_app:/app/streamlit_app
+      - ./delta-storage:/app/delta-storage
+      - ./mlruns:/app/mlruns
+      - ./ml:/app/ml
+    networks:
+      - bigdata-net
+
 networks:
   bigdata-net:
     driver: bridge

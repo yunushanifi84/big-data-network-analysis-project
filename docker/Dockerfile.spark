@@ -1,10 +1,7 @@
-# Temel imaj olarak Bitnami Spark kullanıyoruz (stabil ve güncel)
 FROM bitnamilegacy/spark:3.4.2
 
-# Paket yüklemek için root kullanıcısına geçiyoruz
 USER root
 
-# Planda istenilen veri bilimi ve streaming kütüphanelerinin kurulumu
 RUN pip install --no-cache-dir \
     pyspark==3.4.2 \
     delta-spark==2.4.0 \
@@ -17,8 +14,18 @@ RUN pip install --no-cache-dir \
     matplotlib \
     seaborn
 
-# Matplotlib için writable geçici bir klasör belirliyoruz
+# Delta Lake ve Kafka JAR'larını build sırasında indir → Spark classpath'e koy.
+# spark.jars.packages Python kodu içinden set edilince JVM zaten ayağa kalkmış olur,
+# bu yüzden --packages CLI flag'i veya direkt JAR kopyası gereklidir.
+RUN echo "" > /tmp/dummy.py && \
+    SPARK_LOCAL_IP=127.0.0.1 /opt/bitnami/spark/bin/spark-submit \
+        --master "local[1]" \
+        --packages "io.delta:delta-core_2.12:2.4.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.2" \
+        --conf spark.driver.memory=512m \
+        /tmp/dummy.py && \
+    find /root/.ivy2/jars -name "*.jar" -exec cp {} /opt/bitnami/spark/jars/ \; && \
+    echo "JAR'lar kopyalandı." || echo "ivy2 path bulunamadı, atlanıyor."
+
 ENV MPLCONFIGDIR=/tmp/matplotlib
 
-# Güvenlik için tekrar varsayılan kullanıcıya dönüyoruz
 USER 1001

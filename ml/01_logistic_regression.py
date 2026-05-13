@@ -22,6 +22,7 @@ import time
 from pyspark.ml import Pipeline
 from pyspark.ml.classification import LogisticRegression
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
+from pyspark.ml.feature import StandardScaler
 from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 
 # Proje kökünü Python path'e ekle
@@ -175,14 +176,20 @@ def main():
 
     # 3) Logistic Regression + Pipeline
     print("\n[2/6] Logistic Regression pipeline kuruluyor...")
+    scaler = StandardScaler(
+        inputCol="features",
+        outputCol="scaled_features",
+        withMean=False,
+        withStd=True,
+    )
     lr = LogisticRegression(
-        featuresCol="features",
+        featuresCol="scaled_features",
         labelCol="label",
         weightCol="classWeight",
         maxIter=100,
         regParam=0.01,
     )
-    pipeline = Pipeline(stages=[lr])
+    pipeline = Pipeline(stages=[scaler, lr])
 
     # 4) Cross Validation
     print("\n[3/6] Cross Validation çalıştırılıyor...")

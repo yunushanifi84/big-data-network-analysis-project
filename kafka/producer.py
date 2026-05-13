@@ -11,20 +11,24 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-def create_producer(bootstrap_servers):
-    try:
-        producer = KafkaProducer(
-            bootstrap_servers=bootstrap_servers,
-            value_serializer=lambda v: json.dumps(v, default=str).encode('utf-8'),
-            buffer_memory=16777216,
-            batch_size=16384,
-            linger_ms=10,
-        )
-        logger.info(f"Connected to Kafka broker at {bootstrap_servers}")
-        return producer
-    except Exception as e:
-        logger.error(f"Error connecting to Kafka: {e}")
-        return None
+def create_producer(bootstrap_servers, max_retries=30, retry_interval=5):
+    for attempt in range(1, max_retries + 1):
+        try:
+            producer = KafkaProducer(
+                bootstrap_servers=bootstrap_servers,
+                value_serializer=lambda v: json.dumps(v, default=str).encode('utf-8'),
+                buffer_memory=16777216,
+                batch_size=16384,
+                linger_ms=10,
+            )
+            logger.info(f"Connected to Kafka broker at {bootstrap_servers}")
+            return producer
+        except Exception as e:
+            logger.warning(f"Kafka not ready (attempt {attempt}/{max_retries}): {e}")
+            if attempt < max_retries:
+                time.sleep(retry_interval)
+    logger.error(f"Could not connect to Kafka after {max_retries} attempts")
+    return None
 
 
 def build_message(row):
@@ -51,7 +55,11 @@ def build_message(row):
     if 'flow_id' not in message:
         src_port = message.get('tcp.srcport', message.get('udp.port', '0'))
         dst_port = message.get('tcp.dstport', '0')
-        message['flow_id'] = f"{message['source_ip']}:{src_port}-{message['dest_ip']}:{dst_port}"
+        message['flow_id'] = (
+            f"{message['source_ip']}:{src_port}"
+            f"-{message['dest_ip']}:{dst_port}"
+            f"-{message['timestamp']}"
+        )
 
     return message
 

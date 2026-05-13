@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sqlite3 mlruns/mlflow.db)",
+      "PowerShell($env:PYTHONIOENCODING='utf-8'; python -c \"import sqlite3; c=sqlite3.connect\\('mlruns/mlflow.db'\\); print\\('TABLES:', [r[0] for r in c.execute\\(\\\\\"SELECT name FROM sqlite_master WHERE type='table'\\\\\"\\).fetchall\\(\\)]\\); print\\('EXPERIMENTS:', c.execute\\('SELECT experiment_id, name FROM experiments'\\).fetchall\\(\\)\\); print\\('RUNS:', c.execute\\('SELECT experiment_id, run_uuid, status, name FROM runs ORDER BY start_time DESC LIMIT 30'\\).fetchall\\(\\)\\)\")",
+      "Bash(python *)",
+      "Bash(PYTHONIOENCODING=utf-8 python -c ' *)",
+      "Bash(PYTHONIOENCODING=utf-8 python *)",
+      "Bash(PYTHONIOENCODING=utf-8 streamlit run *)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://localhost:8501/)",
+      "Read(//c/Users/oyunu/AppData/Local/Temp/claude/C--Users-oyunu-Desktop-big-data-project/d0efa857-a376-4fc6-8a59-41966fcc830a/tasks/**)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" \"http://localhost:8501/Genel_Bakış\")",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" \"http://localhost:8501/EDA\")",
+      "Bash(kill %1)",
+      "Bash(pkill -f \"streamlit run\")",
+      "Bash(pkill -f \"streamlit\")",
+      "Bash(pkill -f \"uvicorn\")",
+      "PowerShell(Get-NetTCPConnection *)",
+      "Read(//mnt/c/Users/oyunu/Desktop/**)",
+      "Bash(docker compose *)",
+      "PowerShell(docker compose ps *)"
+    ]
+  }
+}
