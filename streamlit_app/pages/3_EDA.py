@@ -136,9 +136,10 @@ if ENG and "Attack_type" in df.columns:
         sample[col] = pd.to_numeric(sample[col], errors="coerce")
         sample[col] = sample[col].replace([np.inf, -np.inf], np.nan)
         sample.loc[sample[col].abs() > 1e12, col] = np.nan
-    # En çok 6 saldırı tipi göster (grafik okunabilirliği)
-    top_attacks = sample["Attack_type"].value_counts().head(6).index.tolist()
-    sample = sample[sample["Attack_type"].isin(top_attacks)]
+    # Çok nadir saldırı tiplerini çıkar (min 50 satır) — grafik netliği için
+    counts = sample["Attack_type"].value_counts()
+    valid_attacks = counts[counts >= 50].index.tolist()
+    sample = sample[sample["Attack_type"].isin(valid_attacks)]
     for row_start in range(0, len(ENG), 3):
         row_feats = ENG[row_start:row_start + 3]
         row_cols = st.columns(len(row_feats))
