@@ -1,0 +1,203 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[turkish]{babel}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx,float,booktabs,tabularx}
+\usepackage{amsmath}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{setspace}
+\usepackage{parskip}
+\usepackage{fancyhdr}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small IoT Saldırı Tespiti --- Büyük Veri}
+\fancyhead[R]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\onehalfspacing
+
+\begin{document}
+
+% ── KAPAK ──────────────────────────────────────────────────────────────
+\begin{titlepage}
+\centering
+\vspace*{3cm}
+{\LARGE\bfseries IoT Ağ Trafiğinde\\[6pt]Saldırı Tipi Sınıflandırması}\\[1.2cm]
+{\Large Büyük Veri Projesi Raporu}\\[2.5cm]
+\begin{tabular}{rl}
+\textbf{Veri Seti}    & Edge-IIoTset Cyber Security Dataset \\[4pt]
+\textbf{Teknolojiler} & Kafka, Spark, Delta Lake, MLflow, Streamlit \\[4pt]
+\textbf{Tarih}        & Mayıs 2025 \\
+\end{tabular}
+\vfill
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+%=========================================================================
+\section{Giriş}
+
+Bu proje, \textbf{Edge-IIoTset} veri setini kullanarak IoT ağ trafiği üzerinde çok sınıflı (multi-class) saldırı tipi sınıflandırması yapan uçtan uca bir büyük veri pipeline'ı sunar. Kafka ile gerçek zamanlı akış, Spark ile dağıtık işleme, Delta Lake ile katmanlı depolama, 5 ML modeli, MLflow ile deney takibi ve Streamlit dashboard bileşenleri Docker Compose ile orkestre edilir.
+
+\textbf{Amaç:} Gelen her ağ paketinin saldırı türünü (Normal, DDoS, Port Scanning, MITM, Ransomware vb.) yüksek doğrulukla sınıflandırmak.
+
+%=========================================================================
+\section{Veri Seti}
+
+\begin{table}[H]\centering
+\begin{tabular}{ll}
+\toprule
+Kaynak & Kaggle (Mohamed Amine Ferrag) \\
+Dosya  & \texttt{ML-EdgeIIoT-dataset.csv} ($\sim$82\,MB) \\
+Kolon  & 63 (TCP, UDP, HTTP, DNS, MQTT, Modbus vb.) \\
+Sınıf  & 14+ saldırı tipi + Normal \\
+Hedef  & \texttt{Attack\_type} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Her satır bir ağ paketini temsil eder. Paket yalnızca bir protokol kullandığından, diğer protokol kolonları doğal olarak 0'dır (eksik değer değil, aktivite yok).
+
+%=========================================================================
+\section{Sistem Mimarisi}
+
+Tüm bileşenler \texttt{docker compose up -d} ile ayağa kalkar.
+
+\begin{table}[H]\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Bileşen} & \textbf{Teknoloji} & \textbf{Port} \\
+\midrule
+Mesaj Kuyruğu   & Kafka 3.4 + Zookeeper & 9092 \\
+Dağıtık İşleme  & Apache Spark 3.4.2    & 8080 \\
+Depolama         & Delta Lake 2.4.0      & --- \\
+ML Takip         & MLflow                & 5000 \\
+Dashboard        & Streamlit             & 8501 \\
+Notebook         & JupyterLab            & 8888 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Spark cluster: 1 master + 1 worker (2\,GB RAM, 2 core).
+
+%=========================================================================
+\section{Veri Pipeline'ı}
+
+\subsection{Kafka Producer}
+CSV kayıtlarını JSON'a çevirip \texttt{iot-network-traffic} topic'ine (3 partition) gönderir. Her mesaja \texttt{timestamp}, \texttt{flow\_id}, IP adresleri eklenir.
+
+\subsection{Medallion Architecture (Delta Lake)}
+
+\begin{enumerate}[noitemsep]
+  \item \textbf{Bronze:} Ham JSON'u değiştirmeden Delta'ya yazar (yıl/ay/gün partition).
+  \item \textbf{Silver:} JSON parse, kolon rename, 8 gereksiz kolon drop, inf temizleme, eksik değer doldurma, tip cast, duplikat kaldırma.
+  \item \textbf{Gold:} Silver + 5 yeni feature $\Rightarrow$ ML-ready tablo.
+\end{enumerate}
+
+Her katman 30\,s micro-batch ile Structured Streaming olarak çalışır.
+
+%=========================================================================
+\section{Feature Engineering}
+
+Silver verisine eklenen 5 özellik:
+
+\begin{table}[H]\centering
+\begin{tabularx}{\textwidth}{clXl}
+\toprule
+\# & Feature & Formül & Hedef Saldırı \\
+\midrule
+1 & \texttt{traffic\_asymmetry\_ratio} & $\frac{\text{tcp\_ack}}{\text{tcp\_seq}+1}$ & DDoS Flood \\[4pt]
+2 & \texttt{pkt\_size\_cv} & $\frac{\text{tcp\_len}}{|\text{seq}-\text{ack}|+1}$ & Port Scan \\[4pt]
+3 & \texttt{flow\_intensity} & $\text{tcp\_len} \times \text{tcp\_flags}$ & DDoS UDP \\[4pt]
+4 & \texttt{iat\_regularity} & $\frac{\text{tcp\_checksum}}{\text{tcp\_len}+1}$ & Brute Force \\[4pt]
+5 & \texttt{conn\_efficiency} & $\frac{\text{syn}}{\text{fin}+\text{rst}+1}$ & SYN Flood \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+%=========================================================================
+\section{Makine Öğrenmesi Modelleri}
+
+\subsection{Ortak Pipeline}
+\begin{enumerate}[noitemsep]
+  \item Gold Delta'dan batch okuma
+  \item \texttt{StringIndexer} ile Attack\_type $\to$ sayısal label
+  \item \texttt{VectorAssembler} ile feature vektörü
+  \item Balanced class weight: $w_c = \frac{N}{K \cdot N_c}$
+  \item Stratified train/test split (\%80/\%20, seed=42)
+\end{enumerate}
+
+\subsection{Eğitilen Modeller}
+
+\begin{table}[H]\centering
+\begin{tabularx}{\textwidth}{clX}
+\toprule
+\# & Model & Özellik \\
+\midrule
+1 & Logistic Regression & Multinomial, StandardScaler, elasticNet CV \\
+2 & Decision Tree       & maxDepth/minInstances CV, Gini impurity \\
+3 & Random Forest       & 50--200 ağaç, bagging ensemble \\
+4 & GBT (OneVsRest)     & N binary GBT, boosting ensemble \\
+5 & Naive Bayes         & MinMaxScaler, multinomial/complement \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Tüm modeller \texttt{CrossValidator} ile F1-Score optimizasyonu yapar.
+
+\subsection{Değerlendirme Metrikleri}
+Accuracy, Weighted F1, Precision, Recall, Log Loss ve $N \times N$ Confusion Matrix.
+
+%=========================================================================
+\section{MLflow Deney Takibi}
+
+Her eğitim sonrası MLflow'a loglanan bilgiler:
+\begin{itemize}[noitemsep]
+  \item \textbf{Metrikler:} accuracy, f1, precision, recall, per-class P/R/F1
+  \item \textbf{Parametreler:} tüm hiperparametreler, CV config
+  \item \textbf{Artifact'lar:} confusion\_matrix.csv, feature importance (PNG+CSV), Spark model
+  \item \textbf{Tag'ler:} classification\_type, num\_classes, model tipi
+\end{itemize}
+
+Backend: SQLite + artifact store. UI: \texttt{http://localhost:5000}.
+
+%=========================================================================
+\section{Streamlit Dashboard}
+
+6 sayfalık interaktif web arayüzü:
+
+\begin{table}[H]\centering
+\begin{tabular}{cl}
+\toprule
+\# & Sayfa \\
+\midrule
+1 & Genel Bakış (sistem durumu) \\
+2 & Veri Akışı (Kafka $\to$ Delta izleme) \\
+3 & EDA (dağılım, korelasyon) \\
+4 & Feature Engineering (5 feature detayı) \\
+5 & Model Karşılaştırma (F1 sıralı) \\
+6 & En İyi Model (production tavsiyesi) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%=========================================================================
+\section{Sonuç}
+
+Proje, IoT ağ güvenliği için gerçek zamanlı veri toplama, temizleme, feature üretimi ve çok sınıflı sınıflandırmayı tek bir platform altında birleştirmiştir. 5 farklı model eğitilmiş, MLflow ile karşılaştırılmış ve Streamlit üzerinden görselleştirilmiştir. Gelecek adımlar: deep learning modelleri, real-time inference, otomatik alert sistemi.
+
+%=========================================================================
+\section*{Kaynakça}
+\addcontentsline{toc}{section}{Kaynakça}
+\begin{enumerate}[label={[\arabic*]},noitemsep]
+  \item Ferrag, M.A. et al. ``Edge-IIoTset: A New Comprehensive Realistic Cyber Security Dataset.'' \textit{IEEE Access}, 2022.
+  \item Zaharia, M. et al. ``Apache Spark: A Unified Engine for Big Data Processing.'' \textit{CACM}, 2016.
+  \item Armbrust, M. et al. ``Delta Lake: High-Performance ACID Table Storage.'' \textit{VLDB}, 2020.
+  \item Apache Kafka Documentation. \url{https://kafka.apache.org/documentation/}
+  \item MLflow Documentation. \url{https://mlflow.org/docs/latest/index.html}
+\end{enumerate}
+
+\end{document}
